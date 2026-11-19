@@ -70,7 +70,7 @@ def test_the_kind_is_registered_under_the_media_prefix_and_takes_a_file_or_a_rec
     assert jobs.TRANSCRIBE == "media-transcribe" and "media-transcribe" in load_kinds("mediajobs.jobs")
     contract = META["media-transcribe"]
     assert contract["inputs"]["asset"]["accepts"] == ["audio/*", "video/*"] and contract["inputs"]["recording"]["type"] == "string"
-    assert {k for k, v in contract["inputs"].items() if not v["required"]} == {"asset", "recording", "language", "hotwords", "model", "force"}
+    assert {k for k, v in contract["inputs"].items() if not v["required"]} == {"asset", "recording", "language", "hotwords", "model", "force", "entry", "field", "ref_field"}
     assert contract["needs"] == ["faster-whisper"] and contract["produces"] == ["text/plain", "application/json"]
     assert all(kind.startswith("media-") for kind, fn in HANDLERS.items() if fn.__module__ == "mediajobs.jobs")
 

@@ -1,0 +1,930 @@
+{
+  "format": 1,
+  "slug": "media",
+  "name": "Media",
+  "description": "A Recording entry for every audio and video file: its length, make, picture, loudness, waveform and poster, measured by the Media worker, and the Transcripts made from them. Every workflow arrives switched off.",
+  "version": "3",
+  "blueprints": [
+    {
+      "kind": "entry_type",
+      "slug": "recording",
+      "name": "Recording",
+      "description": "One audio or video file and what it says about itself: its length, its make, for a video its picture's size, frame rate and a poster, how loud it is, its waveform and (once transcribed) what is said in it. Made and kept by the Media worker, one per file; the file itself is never changed.",
+      "required": false,
+      "category": "General",
+      "source": "core",
+      "requires": [],
+      "parameters": [],
+      "payload": {
+        "name": "Recording",
+        "icon": "🎚️",
+        "description": "One audio or video file and what it says about itself: its length, its make, for a video its picture's size, frame rate and a poster, how loud it is, its waveform and (once transcribed) what is said in it. Made and kept by the Media worker, one per file; the file itself is never changed.",
+        "sort_order": 0,
+        "is_rendered": false,
+        "schema_json": {
+          "fields": [
+            {
+              "key": "asset",
+              "label": "File",
+              "type": "asset",
+              "required": true,
+              "accept": "audio/*,video/*",
+              "helpText": "The audio or video file this Recording describes. One Recording per file: the worker finds it by this field."
+            },
+            {
+              "key": "kind",
+              "label": "Kind",
+              "type": "select",
+              "options": [
+                "audio",
+                "video"
+              ],
+              "readOnly": true,
+              "helpText": "video when the file has a picture; audio otherwise (a video recorded with the camera off is audio)."
+            },
+            {
+              "key": "source",
+              "label": "Where it came from",
+              "type": "select",
+              "options": [
+                "recorded",
+                "uploaded",
+                "generated"
+              ],
+              "helpText": "recorded: made with the browser's recorder. uploaded: a file someone brought. generated: made by a service (a voice or a sound effect). Filled by the worker when empty; change it if it is wrong and it stays."
+            },
+            {
+              "key": "status",
+              "label": "Status",
+              "type": "select",
+              "options": [
+                "new",
+                "described",
+                "transcribed",
+                "no-speech",
+                "failed"
+              ],
+              "defaultValue": "new",
+              "helpText": "new: waiting for the worker. described: its facts are below. transcribed / no-speech: what is said was written (or nothing was). failed: the file could not be read (the job's log says why)."
+            },
+            {
+              "key": "duration_seconds",
+              "label": "Length (seconds)",
+              "type": "number",
+              "min": 0,
+              "max": 86400,
+              "readOnly": true,
+              "helpText": "How long the file runs, measured (a browser's recording has no length in its header, so it is listened to).",
+              "group": "What the file is",
+              "step": 0.001
+            },
+            {
+              "key": "format",
+              "label": "Format",
+              "type": "text",
+              "readOnly": true,
+              "group": "What the file is",
+              "helpText": "The sound's make in a line, e.g. opus · 48 kHz · mono · 64 kbit/s."
+            },
+            {
+              "key": "codec",
+              "label": "Sound codec",
+              "type": "text",
+              "readOnly": true,
+              "group": "What the file is",
+              "helpText": "The sound stream's codec (opus, aac, mp3, pcm_s16le)."
+            },
+            {
+              "key": "sample_rate",
+              "label": "Sample rate (Hz)",
+              "type": "number",
+              "min": 0,
+              "max": 1000000,
+              "readOnly": true,
+              "helpText": "The sound's samples a second, e.g. 48000.",
+              "group": "What the file is"
+            },
+            {
+              "key": "channels",
+              "label": "Channels",
+              "type": "number",
+              "min": 0,
+              "max": 1024,
+              "readOnly": true,
+              "helpText": "1 is mono, 2 stereo.",
+              "group": "What the file is"
+            },
+            {
+              "key": "width",
+              "label": "Width (px)",
+              "type": "number",
+              "min": 0,
+              "max": 16384,
+              "readOnly": true,
+              "helpText": "The picture's width as a player shows it (a phone's portrait take reads portrait).",
+              "group": "What the file is"
+            },
+            {
+              "key": "height",
+              "label": "Height (px)",
+              "type": "number",
+              "min": 0,
+              "max": 16384,
+              "readOnly": true,
+              "helpText": "The picture's height as a player shows it.",
+              "group": "What the file is"
+            },
+            {
+              "key": "fps",
+              "label": "Frame rate",
+              "type": "number",
+              "min": 0,
+              "max": 240,
+              "readOnly": true,
+              "helpText": "Frames a second. Empty when the file does not say.",
+              "group": "What the file is"
+            },
+            {
+              "key": "has_audio",
+              "label": "Has sound",
+              "type": "boolean",
+              "readOnly": true,
+              "group": "What the file is",
+              "helpText": "Whether there is any sound in the file."
+            },
+            {
+              "key": "poster",
+              "label": "Poster",
+              "type": "asset",
+              "accept": "image/*",
+              "readOnly": true,
+              "group": "What the file is",
+              "helpText": "A frame of the video about a second in (the middle of a short one), made by the worker. Video only."
+            },
+            {
+              "key": "level_lufs",
+              "label": "Loudness (LUFS)",
+              "type": "number",
+              "min": -120,
+              "max": 20,
+              "readOnly": true,
+              "helpText": "How loud it sounds overall (integrated loudness). Speech for film sits near -23 to -16.",
+              "group": "What is heard"
+            },
+            {
+              "key": "level_db",
+              "label": "Average level (dB)",
+              "type": "number",
+              "min": -120,
+              "max": 20,
+              "readOnly": true,
+              "helpText": "The average level, in dB below full scale.",
+              "group": "What is heard",
+              "meter": true
+            },
+            {
+              "key": "peak_db",
+              "label": "Loudest moment (dB)",
+              "type": "number",
+              "min": -120,
+              "max": 20,
+              "readOnly": true,
+              "helpText": "The loudest peak, in dB below full scale. 0 is the ceiling.",
+              "group": "What is heard",
+              "meter": true
+            },
+            {
+              "key": "noise_floor_db",
+              "label": "Noise floor (dB)",
+              "type": "number",
+              "min": -120,
+              "max": 20,
+              "readOnly": true,
+              "helpText": "The quietest stretch: the room's noise when nothing else sounds. ACX asks for -60 dB or lower.",
+              "group": "What is heard"
+            },
+            {
+              "key": "clipped",
+              "label": "Clipped",
+              "type": "boolean",
+              "readOnly": true,
+              "group": "What is heard",
+              "helpText": "On when the loudest moment touched the ceiling, so the top of the wave is probably cut off."
+            },
+            {
+              "key": "lead_silence",
+              "label": "Silence before (seconds)",
+              "type": "number",
+              "min": 0,
+              "max": 86400,
+              "readOnly": true,
+              "helpText": "How long before the first sound.",
+              "group": "What is heard"
+            },
+            {
+              "key": "tail_silence",
+              "label": "Silence after (seconds)",
+              "type": "number",
+              "min": 0,
+              "max": 86400,
+              "readOnly": true,
+              "helpText": "How long after the last sound.",
+              "group": "What is heard"
+            },
+            {
+              "key": "waveform",
+              "label": "Waveform",
+              "type": "json",
+              "readOnly": true,
+              "group": "What is heard",
+              "helpText": "The loudest and quietest point in each of 240 stretches (audiowaveform JSON), worked out by the worker. Nothing to edit."
+            },
+            {
+              "key": "language",
+              "label": "Language",
+              "type": "text",
+              "readOnly": true,
+              "group": "What is said",
+              "helpText": "The language heard, as a code (en)."
+            },
+            {
+              "key": "text",
+              "label": "What is said",
+              "type": "textarea",
+              "rows": 6,
+              "readOnly": true,
+              "group": "What is said",
+              "helpText": "The words heard in the file, as plain text (searchable)."
+            },
+            {
+              "key": "words",
+              "label": "Word timings",
+              "type": "json",
+              "readOnly": true,
+              "group": "What is said",
+              "helpText": "Each word with its start and end in seconds from the file's start: [{text, start, end}]. Empty for a long recording: its Transcript's JSON file holds them."
+            },
+            {
+              "key": "transcript",
+              "label": "Transcript",
+              "type": "text",
+              "ref": "transcript",
+              "group": "What is said",
+              "helpText": "The Transcript entry with the downloadable files, when they were made (long recordings)."
+            },
+            {
+              "key": "job",
+              "label": "Last job",
+              "type": "text",
+              "readOnly": true,
+              "helpText": "Slug of the last media job that wrote here."
+            },
+            {
+              "key": "notes",
+              "label": "Notes",
+              "type": "textarea",
+              "rows": 3,
+              "helpText": "Who is in it, what it is for, what to fix."
+            }
+          ]
+        }
+      }
+    },
+    {
+      "kind": "entry_type",
+      "slug": "transcript",
+      "name": "Transcript",
+      "description": "What was said in a recording, as text: the transcript files a worker made, the recording they came from, and your notes. A transcribe job is the request; this is what it gives you.",
+      "required": false,
+      "category": "General",
+      "source": "core",
+      "requires": [],
+      "parameters": [],
+      "payload": {
+        "name": "Transcript",
+        "icon": "📝",
+        "description": "What was said in a recording, as text: the transcript files a worker made, the recording they came from, and your notes. A transcribe job is the request; this is what it gives you.",
+        "sort_order": 0,
+        "is_rendered": false,
+        "schema_json": {
+          "fields": [
+            {
+              "key": "source",
+              "label": "Recording",
+              "type": "asset",
+              "helpText": "The audio or video that was transcribed.",
+              "accept": "audio/*,video/*"
+            },
+            {
+              "key": "paragraphs",
+              "label": "Transcript",
+              "type": "asset",
+              "helpText": "The words in paragraphs: the one to read or hand on.",
+              "accept": "text/plain,.txt,.md"
+            },
+            {
+              "key": "timestamped",
+              "label": "With times",
+              "type": "asset",
+              "helpText": "The same, a line per phrase with the time it starts.",
+              "accept": "text/plain,.txt,.md"
+            },
+            {
+              "key": "words",
+              "label": "Words",
+              "type": "asset",
+              "helpText": "The plain text, unbroken.",
+              "accept": "text/plain,.txt,.md"
+            },
+            {
+              "key": "json",
+              "label": "As JSON",
+              "type": "asset",
+              "helpText": "The words with their times, for a program to read.",
+              "accept": "application/json,.json"
+            },
+            {
+              "key": "language",
+              "label": "Language",
+              "type": "text",
+              "helpText": "The language the speech was in."
+            },
+            {
+              "key": "duration_seconds",
+              "label": "Length (seconds)",
+              "type": "number",
+              "helpText": "How long the recording is."
+            },
+            {
+              "key": "job",
+              "label": "Job",
+              "type": "text",
+              "helpText": "Slug of the transcribe job that made it."
+            },
+            {
+              "key": "notes",
+              "label": "Notes",
+              "type": "textarea",
+              "helpText": "Who is speaking, what to fix, what it is for.",
+              "rows": 3
+            },
+            {
+              "key": "recording",
+              "label": "Recording entry",
+              "type": "text",
+              "ref": "recording",
+              "helpText": "The Recording entry of the file that was transcribed (Media keeps it)."
+            }
+          ]
+        }
+      }
+    },
+    {
+      "kind": "collection",
+      "slug": "media-recordings",
+      "name": "Media: Recordings",
+      "description": "Every audio and video file's Recording, and the Transcripts made from them.",
+      "required": false,
+      "category": "General",
+      "source": "core",
+      "requires": [
+        "entry_type:recording",
+        "entry_type:transcript"
+      ],
+      "parameters": [],
+      "payload": {
+        "description": "Every audio and video file's Recording, and the Transcripts made from them.",
+        "icon": "🎚️",
+        "color": "#0D9488",
+        "is_smart": true,
+        "is_public": false,
+        "in_sidebar": true,
+        "sort_order": 20,
+        "smart_rules": {
+          "entry_types": [
+            "recording",
+            "transcript"
+          ],
+          "match": "all"
+        }
+      }
+    },
+    {
+      "kind": "workflow",
+      "slug": "media-recording-on-upload",
+      "name": "Media: a Recording for each new recording",
+      "description": "Optional, off until you switch it on. Every audio or video file a person uploads or records into the Assets library gets a Recording entry, made by the Media worker (media-describe) with the file's facts. Left alone: files a worker made (they carry `worker` or `kind` in their metadata), versions made from another file (`derived_from`) and files a service generated. A file that already has a Recording is found, not described twice. Needs a worker that offers media-describe (see the README); set up workers first (Settings, Workers).",
+      "required": false,
+      "category": "General",
+      "source": "core",
+      "requires": [
+        "entry_type:job"
+      ],
+      "parameters": [],
+      "payload": {
+        "name": "Media: a Recording for each new recording",
+        "definition": {
+          "trigger": {
+            "type": "event",
+            "event": "asset_uploaded"
+          },
+          "conditions": [
+            {
+              "any": [
+                {
+                  "field": "asset.mime_type",
+                  "op": "starts_with",
+                  "value": "audio/"
+                },
+                {
+                  "field": "asset.mime_type",
+                  "op": "starts_with",
+                  "value": "video/"
+                }
+              ]
+            },
+            {
+              "field": "asset.derived_from",
+              "op": "exists",
+              "value": false
+            },
+            {
+              "field": "asset.metadata.worker",
+              "op": "exists",
+              "value": false
+            },
+            {
+              "field": "asset.metadata.kind",
+              "op": "exists",
+              "value": false
+            },
+            {
+              "field": "asset.origin",
+              "op": "neq",
+              "value": "generated"
+            }
+          ],
+          "actions": [
+            {
+              "kind": "entry",
+              "op": "create",
+              "entry_type": "job",
+              "title": "Describe: ${asset.name|truncate:60}",
+              "status": "draft",
+              "data": {
+                "kind": "media-describe",
+                "args": {
+                  "asset": "${asset.id}"
+                },
+                "status": "queued"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "kind": "workflow",
+      "slug": "media-describe",
+      "name": "Media: describe a recording",
+      "description": "Make (or find) the Recording entry of an audio or video file in the Assets library and write what the file says about itself: its length, its make, for a video its size, frame rate and a poster, how loud it is and its waveform. The same facts go on the file's own metadata. Free, on the Media worker. Asked for by hand, so a file described before is described again.",
+      "required": false,
+      "category": "General",
+      "source": "core",
+      "requires": [
+        "entry_type:job"
+      ],
+      "parameters": [],
+      "payload": {
+        "name": "Media: describe a recording",
+        "definition": {
+          "trigger": {
+            "type": "manual",
+            "inputs": [
+              {
+                "name": "asset",
+                "label": "Recording (the audio or video asset's slug or id)",
+                "type": "text",
+                "required": true
+              }
+            ]
+          },
+          "actions": [
+            {
+              "kind": "entry",
+              "op": "create",
+              "entry_type": "job",
+              "title": "Describe: ${input.asset}",
+              "status": "draft",
+              "data": {
+                "kind": "media-describe",
+                "args": {
+                  "asset": "${input.asset}",
+                  "force": true
+                },
+                "status": "queued"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "kind": "workflow",
+      "slug": "media-archive-done-job",
+      "name": "Media: put a finished media job away",
+      "description": "Optional, off until you switch it on, and only for a workspace WITHOUT Screenplay Studio (whose own Screenplay: put a finished job away already archives media jobs too). A media job (kind media-…) that finishes (its Status becomes done) is archived, so it leaves Drafts. A queued, running or failed one stays a draft, so a failure stays in sight. Archiving is an edit too: the job's Status does not change in it, so this never fires twice.",
+      "required": false,
+      "category": "General",
+      "source": "core",
+      "requires": [
+        "entry_type:job"
+      ],
+      "parameters": [],
+      "payload": {
+        "name": "Media: put a finished media job away",
+        "definition": {
+          "trigger": {
+            "type": "event",
+            "event": "entry_updated"
+          },
+          "conditions": [
+            {
+              "field": "entry.entry_type",
+              "op": "eq",
+              "value": "job"
+            },
+            {
+              "field": "entry.data.kind",
+              "op": "starts_with",
+              "value": "media-"
+            },
+            {
+              "field": "entry.data.status",
+              "op": "changed_to",
+              "value": "done"
+            },
+            {
+              "field": "entry.status",
+              "op": "eq",
+              "value": "draft"
+            }
+          ],
+          "actions": [
+            {
+              "kind": "entry",
+              "op": "archive"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "kind": "workflow",
+      "slug": "media-transcribe-recording",
+      "name": "Media: transcribe a recording",
+      "description": "Hear what is said in an audio or video file in the Assets library and write it to its Recording: the language, the words, and each word's start and end; the words, the words with times, in paragraphs and as JSON are kept as files on the Recording's Transcript. A file with no Recording, or one not described yet, is described first. Free, on the Media worker, but heavy on its CPU (minutes for a long recording), and the worker does one job at a time. Only recordings of 1 to 1800 seconds (30 minutes). Asked for by hand, so a recording heard before is heard again, a made voice too.",
+      "required": false,
+      "category": "General",
+      "source": "core",
+      "requires": [
+        "entry_type:job"
+      ],
+      "parameters": [],
+      "payload": {
+        "name": "Media: transcribe a recording",
+        "definition": {
+          "trigger": {
+            "type": "manual",
+            "inputs": [
+              {
+                "name": "asset",
+                "label": "Recording (the audio or video asset's slug or id)",
+                "type": "text",
+                "required": true
+              },
+              {
+                "name": "hotwords",
+                "label": "Names and unusual words to listen for, so they are spelled right (optional)",
+                "type": "text",
+                "required": false,
+                "default": ""
+              },
+              {
+                "name": "language",
+                "label": "Spoken language as a code, e.g. en (optional: empty detects it)",
+                "type": "text",
+                "required": false
+              }
+            ]
+          },
+          "actions": [
+            {
+              "kind": "entry",
+              "op": "create",
+              "entry_type": "job",
+              "title": "Transcribe: ${input.asset}",
+              "status": "draft",
+              "data": {
+                "kind": "media-transcribe",
+                "args": {
+                  "asset": "${input.asset}",
+                  "hotwords": "${input.hotwords}",
+                  "language": "${input.language}",
+                  "force": true
+                },
+                "status": "queued"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "kind": "workflow",
+      "slug": "media-transcribe-on-describe",
+      "name": "Media: transcribe each new recording",
+      "description": "Optional, off until you switch it on. When the Media worker has described a Recording (its Status becomes described) and it has sound, runs 1 to 1800 seconds and was not made by a service, it is transcribed (media-transcribe): its words go on the Recording and its files on a Transcript. Heavy on the CPU: switch it on only if every recording should be transcribed. It fires once per Recording: the transcription's own write moves the Status on to transcribed or no-speech, and describing again never moves it back. Change the length bounds here if you need to; the worker never transcribes more than 1800 seconds.",
+      "required": false,
+      "category": "General",
+      "source": "core",
+      "requires": [
+        "entry_type:job"
+      ],
+      "parameters": [],
+      "payload": {
+        "name": "Media: transcribe each new recording",
+        "definition": {
+          "trigger": {
+            "type": "event",
+            "event": "entry_updated"
+          },
+          "conditions": [
+            {
+              "field": "entry.entry_type",
+              "op": "eq",
+              "value": "recording"
+            },
+            {
+              "field": "entry.data.status",
+              "op": "changed_to",
+              "value": "described"
+            },
+            {
+              "any": [
+                {
+                  "field": "entry.data.has_audio",
+                  "op": "eq",
+                  "value": true
+                },
+                {
+                  "field": "entry.data.kind",
+                  "op": "eq",
+                  "value": "audio"
+                }
+              ]
+            },
+            {
+              "field": "entry.data.duration_seconds",
+              "op": "gte",
+              "value": 1
+            },
+            {
+              "field": "entry.data.duration_seconds",
+              "op": "lte",
+              "value": 1800
+            },
+            {
+              "field": "entry.data.source",
+              "op": "neq",
+              "value": "generated"
+            },
+            {
+              "field": "entry.data.text",
+              "op": "exists",
+              "value": false
+            },
+            {
+              "not": {
+                "field": "entry.status",
+                "op": "changed"
+              }
+            }
+          ],
+          "actions": [
+            {
+              "kind": "entry",
+              "op": "create",
+              "entry_type": "job",
+              "title": "Transcribe: ${entry.title|truncate:60}",
+              "status": "draft",
+              "data": {
+                "kind": "media-transcribe",
+                "args": {
+                  "recording": "${entry.slug}"
+                },
+                "status": "queued"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "kind": "workflow",
+      "slug": "media-backfill-dry-run",
+      "name": "Media: which files would get a Recording (dry run)",
+      "description": "Asked for by hand. Lists the audio and video files already in the Assets library that a backfill would give a Recording (a person's own recordings and uploads with none yet), and every file it would leave out with the reason: in the Trash, a Recording already, a version of another file, made by a service (ElevenLabs), a voice preview, made by a worker. Writes nothing: the plan is the job's result (open the job). Then run “Media: give existing files a Recording”. Needs a worker that offers media-backfill (see the README).",
+      "required": false,
+      "category": "General",
+      "source": "core",
+      "requires": [
+        "entry_type:job"
+      ],
+      "parameters": [],
+      "payload": {
+        "name": "Media: which files would get a Recording (dry run)",
+        "definition": {
+          "trigger": {
+            "type": "manual",
+            "inputs": [
+              {
+                "name": "limit",
+                "label": "How many files (at most; default 50)",
+                "type": "number",
+                "required": false,
+                "default": 50
+              },
+              {
+                "name": "kinds",
+                "label": "Which files: audio, video or both",
+                "type": "choice",
+                "options": [
+                  "both",
+                  "audio",
+                  "video"
+                ],
+                "required": false,
+                "default": "both"
+              }
+            ]
+          },
+          "actions": [
+            {
+              "kind": "entry",
+              "op": "create",
+              "entry_type": "job",
+              "title": "Backfill (dry run): ${input.kinds}",
+              "status": "draft",
+              "data": {
+                "kind": "media-backfill",
+                "args": {
+                  "limit": "${input.limit}",
+                  "kinds": "${input.kinds}",
+                  "dry_run": true
+                },
+                "status": "queued"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "kind": "workflow",
+      "slug": "media-backfill-run",
+      "name": "Media: give existing files a Recording",
+      "description": "Asked for by hand, after the dry run. Gives up to “How many” audio and video files already in the Assets library a Recording, the oldest first, and describes each (its length, make, loudness, waveform, poster), with the same rules as the dry run. Run it again for the next ones: a file that has a Recording is passed over, so nothing is done twice. Transcribing is off unless you choose it, and heavy on the worker's CPU (minutes per long recording): keep the batches small then. Careful: while “Media: transcribe each new recording” is on, every Recording described here is transcribed too.",
+      "required": false,
+      "category": "General",
+      "source": "core",
+      "requires": [
+        "entry_type:job"
+      ],
+      "parameters": [],
+      "payload": {
+        "name": "Media: give existing files a Recording",
+        "definition": {
+          "trigger": {
+            "type": "manual",
+            "inputs": [
+              {
+                "name": "limit",
+                "label": "How many files (at most; default 50)",
+                "type": "number",
+                "required": false,
+                "default": 50
+              },
+              {
+                "name": "kinds",
+                "label": "Which files: audio, video or both",
+                "type": "choice",
+                "options": [
+                  "both",
+                  "audio",
+                  "video"
+                ],
+                "required": false,
+                "default": "both"
+              },
+              {
+                "name": "describe",
+                "label": "Describe each file (its length, loudness, waveform, poster)",
+                "type": "choice",
+                "options": [
+                  "yes",
+                  "no"
+                ],
+                "required": false,
+                "default": "yes"
+              },
+              {
+                "name": "transcribe",
+                "label": "Transcribe each file too (1 to 1800 seconds; heavy on the CPU)",
+                "type": "choice",
+                "options": [
+                  "no",
+                  "yes"
+                ],
+                "required": false,
+                "default": "no"
+              }
+            ]
+          },
+          "actions": [
+            {
+              "kind": "entry",
+              "op": "create",
+              "entry_type": "job",
+              "title": "Backfill: ${input.limit} ${input.kinds}",
+              "status": "draft",
+              "data": {
+                "kind": "media-backfill",
+                "args": {
+                  "limit": "${input.limit}",
+                  "kinds": "${input.kinds}",
+                  "describe": "${input.describe}",
+                  "transcribe": "${input.transcribe}",
+                  "dry_run": false
+                },
+                "status": "queued"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "kind": "workflow",
+      "slug": "media-recording-asset-trashed",
+      "name": "Media: a Recording goes to the Trash with its file",
+      "description": "Optional, off until you switch it on. When an audio or video file is moved to the Trash, its Recording goes to the Trash too, so no Recording is left without its file. A file deleted forever was in the Trash first, so this covers that too. Restoring the file does not restore its Recording: restore that from the Trash as well. Nothing else is touched: Transcripts and the files they keep stay where they are. Safe to fire twice: a Recording already in the Trash is not found again, and a file with no Recording is passed over. A file with two Recordings (one made by hand) fails the run, which says so: move the extra one to the Trash by hand.",
+      "required": false,
+      "category": "General",
+      "source": "core",
+      "requires": [
+        "entry_type:recording"
+      ],
+      "parameters": [],
+      "payload": {
+        "name": "Media: a Recording goes to the Trash with its file",
+        "definition": {
+          "trigger": {
+            "type": "event",
+            "event": "asset_trashed"
+          },
+          "conditions": [
+            {
+              "any": [
+                {
+                  "field": "asset.mime_type",
+                  "op": "starts_with",
+                  "value": "audio/"
+                },
+                {
+                  "field": "asset.mime_type",
+                  "op": "starts_with",
+                  "value": "video/"
+                }
+              ]
+            }
+          ],
+          "actions": [
+            {
+              "kind": "entry",
+              "op": "trash",
+              "entity_type": "entry",
+              "if_none": "skip",
+              "entity_query": {
+                "entry_type": "recording",
+                "data": {
+                  "asset": "${asset.id}"
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

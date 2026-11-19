@@ -3,7 +3,7 @@
   "slug": "media",
   "name": "Media",
   "description": "A Recording entry for every audio and video file: its length, make, picture, loudness, waveform and poster, measured by the Media worker, and the Transcripts made from them. Every workflow arrives switched off.",
-  "version": "3",
+  "version": "4",
   "blueprints": [
     {
       "kind": "entry_type",
@@ -920,6 +920,75 @@
                 "data": {
                   "asset": "${asset.id}"
                 }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "kind": "workflow",
+      "slug": "media-link-entry",
+      "name": "Media: link an entry to its recording",
+      "description": "Asked for by hand: joins one entry of another package (a Screenplay Studio beat, take, sound or speech line) to the Recording of the file it holds, found or made and described, and copies the Recording's facts into the fields the entry has always kept them in (a beat's clip length, size, sound, poster and what was said; a take's, a sound's or a line's length, waveform and levels). Only what differs is written, never the file itself. For checking the link on a few entries before the workflows that do it on every change are switched on, and for linking again after a change by hand. Transcribing is off unless you choose it.",
+      "required": false,
+      "category": "General",
+      "source": "core",
+      "requires": [
+        "entry_type:job"
+      ],
+      "parameters": [],
+      "payload": {
+        "name": "Media: link an entry to its recording",
+        "definition": {
+          "trigger": {
+            "type": "manual",
+            "inputs": [
+              {
+                "name": "entry",
+                "label": "Entry (its slug: a beat, take, sound or speech line)",
+                "type": "text",
+                "required": true
+              },
+              {
+                "name": "mirror",
+                "label": "Copy the Recording's facts into the entry's own fields",
+                "type": "choice",
+                "options": [
+                  "yes",
+                  "no"
+                ],
+                "required": false,
+                "default": "yes"
+              },
+              {
+                "name": "transcribe",
+                "label": "Transcribe the file if it has not been heard (a beat's clip: What you said)",
+                "type": "choice",
+                "options": [
+                  "no",
+                  "yes"
+                ],
+                "required": false,
+                "default": "no"
+              }
+            ]
+          },
+          "actions": [
+            {
+              "kind": "entry",
+              "op": "create",
+              "entry_type": "job",
+              "title": "Link: ${input.entry}",
+              "status": "draft",
+              "data": {
+                "kind": "media-link",
+                "args": {
+                  "entry": "${input.entry}",
+                  "mirror": "${input.mirror}",
+                  "transcribe": "${input.transcribe}"
+                },
+                "status": "queued"
               }
             }
           ]

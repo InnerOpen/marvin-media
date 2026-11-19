@@ -11,7 +11,7 @@ It has two parts:
 - **The worker kinds** (`mediajobs/`, kinds named `media-…`): the work the workflows hand off, run by the Media worker image on the generic
   [Marvin worker](https://github.com/InnerOpen/marvin-worker).
 
-## What the package brings (m1, m2, m3)
+## What the package brings (m1 to m4)
 
 | | slug | what it is |
 |---|---|---|
@@ -25,6 +25,7 @@ It has two parts:
 | workflow (m3) | `media-backfill-dry-run` | By hand: the plan for giving the files **already in the library** a Recording (`media-backfill`, dry run): which files would get one and why each other file would not. Writes nothing. Inputs: how many to list (`limit`, default 50), `kinds` (both, audio, video). |
 | workflow (m3) | `media-backfill-run` | By hand, after the dry run: gives up to `limit` of those files a Recording, oldest first, and describes each; transcribes too only if you choose it. Run it again for the next batch. |
 | workflow (m3) | `media-recording-asset-trashed` | On `asset_trashed` of an audio or video file: its Recording goes to the Trash too (an `entry trash` step that finds the Recording by its `asset`, `entity_type: entry` spelled out, since on an asset event a bare `trash` would act on the file). A file deleted forever was trashed first, so that is covered. Restoring the file does not restore the Recording. A file with no Recording is passed over; one with two (one made by hand) fails the run, which says so. |
+| workflow (m4) | `media-link-entry` | By hand: link one entry of another package (a Screenplay Studio beat, take, sound or speech line, by its slug) to the Recording of the file it holds, and copy the Recording's facts into the entry's own fields (`media-link` with `entry`; the mirror is on unless you choose no, transcribing is off unless you choose yes). For checking a few entries before Studio's link workflows are switched on. |
 | workflow (m2) | `media-transcribe-on-describe` | On `entry_updated` of a Recording whose `status` **changes to** `described`, when it has sound (`has_audio`, or kind `audio`), runs 1 to 1800 s, is not `generated` and has no `text` yet (never heard), and its publish status did not move in the same write: queues `media-transcribe` for it. It fires once per Recording: the transcriber's own write moves the status on to `transcribed` or `no-speech`, and describing again never moves it back. |
 
 **Every workflow arrives switched off.** Marvin creates a package's workflows disabled; switching one on is a deliberate act (Workflows page).
@@ -69,7 +70,37 @@ to the Transcript made earlier from the same file (a Transcript whose `source` i
 `transcript-recording-nov-18-2026-54618-pm`). The Recording's `transcript` names it (the one it names already while that one is live, else the
 oldest that names this Recording back, else the oldest heard from the file), and every Transcript of the file with no `recording` gets this
 Recording. A Transcript that names another Recording is left alone. Only what differs is written; a second run writes nothing. A file with no
-Recording is said, not made. (The mirror maps onto Studio's beat, take, sound and line come later, in m4.)
+Recording is said, not made.
+
+**The mirror (m4).** Given an `entry` (a Studio beat, take, sound or speech line) instead, `media-link` reads the file in its `field` (`clip`
+for a beat, else `audio`), finds or makes that file's Recording (describing it first, with media-describe's own logic, when it is new), names
+it in the entry's `ref_field` (`recording`) and copies the Recording's facts into the fields the entry has always held them in, so what reads
+those fields today keeps working (`mediajobs/mirror.py`, one pure map each, design §2.3):
+
+| `mirror` | entry fields written from the Recording |
+|---|---|
+| `beat-clip` | `clip_seconds`, `clip_width`, `clip_height`, `clip_has_audio`, `clip_poster` (the Recording's poster); once heard, `clip_text` (its words joined, as Studio's transcribe-clip joins them) and `clip_words` as `[{word, start, end}]` (the Recording's `text` key turned into Studio's `word`, to a millisecond) |
+| `take` | `duration_seconds`, `waveform`, `peak_db`, and what describe-audio measures the same way: `format`, `level_lufs`, `noise_floor_db`, `clipped` (`yes`/`no`), `lead_silence`, `tail_silence`. Never `rms_db` (another measure) nor `heard` (time-words') |
+| `sound` | `level_db`, `peak_db`, `waveform`; `duration_seconds` only for a sound of its own file (`source` uploaded or recorded): a generated sound's length is what was asked of ElevenLabs |
+| `line` | `duration_seconds`, `waveform` |
+
+- `mirror` is a map's name, yes (the default: the map of the entry's type) or no/`none` (only `recording` is written).
+- Only what differs is written, in one write, and never the file's own field, so the job's write never sets off a workflow that listens for
+  the file changing. A second run writes nothing.
+- Trust: facts are copied only from a Recording of the very file the field holds. `asset` (the file the field held when the job was asked
+  for, as a workflow sends it) must still be there, else the job writes nothing: the job asked for since has the new file.
+- A fact the Recording does not know (not heard yet, no poster) empties the entry's field only when the entry's facts came from another
+  Recording (its `recording` named another one); an entry from before Media keeps what Studio's own jobs wrote.
+- An entry a workflow is waiting on (`status: queued`) is never written: Studio's make-a-still, make-a-sound and make-a-take workflows start on
+  any write to a queued entry, so a write then would ask for the same thing twice. Its Recording is still made and described; Studio's link
+  workflows link it again when it leaves the queue.
+- An emptied field empties `recording` and the map's facts (settings such as `clip_look` stay). A poster Studio's describe-video made for
+  the beat goes to the Trash when the beat stops showing it; a Recording's poster never does.
+- A value the entry's field would refuse (a level under a Sound's -60 dB, a length over a cap an older workspace kept) is left out and said;
+  the rest is written.
+- With `transcribe`, a Recording with sound that is not heard yet is queued for `media-transcribe` with the entry, field and map: once heard
+  (or found heard already), the transcriber writes the entry's mirror again, so a beat's `clip_text` and `clip_words` follow. Not for a
+  file with no sound or one a service made.
 
 `media-backfill` (m3) gives the files already in the library a Recording. Arguments: `limit` (default 50, at most 500), `dry_run` (default
 **true**), `kinds` (`audio`, `video` or `both`, the default), `describe` (default true), `transcribe` (default false), `after` (the `next` a
@@ -167,9 +198,9 @@ Build it with a checkout of
 (#15) and upload stamp (#16), and the build stops if the base lacks them.
 
 ```bash
-docker/build.sh                       # builds marvin-worker-base from ../MarvinWorker, then marvin-media-worker:m3 (and :latest)
+docker/build.sh                       # builds marvin-worker-base from ../MarvinWorker, then marvin-media-worker:m4 (and :latest)
 MEDIA_SKIP_BASE=1 docker/build.sh     # or on the marvin-worker-base already on this machine
-docker run --rm -e WORKER_KINDS=media-describe,media-transcribe,media-link,media-backfill marvin-media-worker:m3 python -m marvin_worker kinds   # what it offers; needs no Marvin
+docker run --rm -e WORKER_KINDS=media-describe,media-transcribe,media-link,media-backfill marvin-media-worker:m4 python -m marvin_worker kinds   # what it offers; needs no Marvin
 ```
 
 One worker per workspace (a worker's token is pinned to one workspace). The compose file names everything after the workspace, so several
@@ -229,12 +260,14 @@ docs/media.marvin-package.json   the package (edit by hand; tests/test_package.p
 mediajobs/jobs.py                the worker kinds (media-describe, media-transcribe, media-link, media-backfill)
 mediajobs/library.py             which library files a backfill gives a Recording, and why not the others (pure)
 mediajobs/recording.py           what a Recording holds, from a file's facts (pure)
+mediajobs/mirror.py              the mirror: a Recording's facts as Studio's beat, take, sound and line fields (pure)
 mediajobs/transcribe.py          the model (faster-whisper): load, hear once with word times, the limits (from Studio's storytranscribe)
 mediajobs/text.py                the transcript's text forms (shared with Studio's storytranscribe)
 mediajobs/{ffmpeg,audio_measure,waveform,video}.py   shared with Studio's storyrender: its renders run them
 docker/                          the image, its build script, compose for one workspace, the env file's shape
 tests/                           a stand-in Marvin (fake_marvin.py), test recordings made with ffmpeg (media_files.py)
 tests/data/                      Studio's v229 Transcript (Media's must equal it plus one field); Studio's numbers for the parity check;
-                                 the package as m1 and m2 shipped it (each later version keeps every earlier item exactly)
+                                 the package as m1, m2 and m3 shipped it (each later version keeps every earlier item exactly);
+                                 Studio v232's beat, take, sound and speech-line fields (what the mirror maps write to)
 scripts/studio_golden.py         writes those numbers from a Studio checkout
 ```

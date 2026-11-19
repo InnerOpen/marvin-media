@@ -107,7 +107,7 @@ def test_both_kinds_are_registered_with_the_media_prefix_and_their_contracts():
     assert {"media-backfill", "media-link"} <= set(load_kinds("mediajobs.jobs"))
     assert set(META["media-backfill"]["inputs"]) == {"limit", "kinds", "after", "min_bytes"}  # the yes/no ones are read as text or booleans
     assert META["media-backfill"]["inputs"]["kinds"]["enum"] == ["audio", "video", "both"]
-    assert set(META["media-link"]["inputs"]) == {"asset", "recording"}
+    assert set(META["media-link"]["inputs"]) == {"asset", "recording", "entry", "field", "ref_field"}  # mirror and transcribe: yes/no, read as text or booleans
     check_args("media-backfill", {"limit": 50, "kinds": "both", "dry_run": True, "describe": "yes", "transcribe": False})
     with pytest.raises(Exception, match="kinds"):
         check_args("media-backfill", {"kinds": "pictures"})

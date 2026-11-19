@@ -146,6 +146,21 @@ def test_asked_with_force_it_is_described_again_with_a_new_poster_and_the_old_on
 
 
 @needs_ffmpeg
+def test_a_new_poster_under_a_slug_marvin_holds_takes_the_next_free_one(marvin, tmp_path):
+    """Marvin refuses a second asset under a slug (one in the Trash included), so asking again with force would find the poster slug taken."""
+    _file(marvin, tmp_path, "phone-webm")
+    marvin.strict_asset_slugs = True
+    describe({"asset": ID}, tmp_path / "w1")
+    first = marvin.entry(SLUG)["dataJson"]
+    describe({"asset": ID, "force": True}, tmp_path / "w2", job="describe-2")
+    data = marvin.entry(SLUG)["dataJson"]
+    assert data["poster"] != first["poster"] and marvin.assets[data["poster"]]["slug"] == f"{SLUG}-poster-2"
+    assert marvin.assets[first["poster"]]["trashedAt"] and not marvin.assets[data["poster"]]["trashedAt"]
+    describe({"asset": ID, "force": True}, tmp_path / "w3", job="describe-3")  # and the old one is in the Trash, still holding its slug
+    assert marvin.assets[marvin.entry(SLUG)["dataJson"]["poster"]]["slug"] == f"{SLUG}-poster-3"
+
+
+@needs_ffmpeg
 def test_a_new_poster_that_cannot_be_made_leaves_the_old_one_in_place(marvin, tmp_path, monkeypatch):
     _file(marvin, tmp_path, "phone-webm")
     describe({"asset": ID}, tmp_path / "w1")

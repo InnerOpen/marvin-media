@@ -239,6 +239,30 @@ def test_a_job_tried_again_after_its_last_write_failed_finds_the_transcript_it_m
     assert sum(1 for f in marvin.uploads() if not f["trashedAt"]) == 4  # the first try's files went to the Trash
 
 
+def test_a_job_tried_again_finds_the_files_its_first_try_uploaded_under_their_slugs(marvin, heard, tmp_path):
+    """A file's slug is unique in the workspace: the same job run again (its last write failed) must not be refused for the slugs it took."""
+    _described(marvin, tmp_path)
+    marvin.strict_asset_slugs = True
+    marvin.fail_entry_patch = True
+    with pytest.raises(Exception, match="500"):
+        run({"recording": SLUG}, tmp_path / "w1")
+    marvin.fail_entry_patch = False
+    first = sorted(f["slug"] for f in marvin.uploads())
+    run({"recording": SLUG}, tmp_path / "w2")
+    assert sorted(f["slug"] for f in marvin.uploads()) == first and len(first) == 4  # the same four files, none made twice
+    (tr,) = marvin.live("transcript")
+    assert marvin.entry(SLUG)["dataJson"]["status"] == "transcribed" and tr["dataJson"]["json"] in {f["id"] for f in marvin.uploads()}
+
+
+def test_another_files_slug_is_not_taken_over_and_the_next_free_one_is_used(marvin, heard, tmp_path):
+    _described(marvin, tmp_path)
+    marvin.strict_asset_slugs = True
+    marvin.add_asset(None, mime="text/plain", name="Somebody's", slug="transcribe-1-text", meta={"kind": "notes"})
+    run({"recording": SLUG}, tmp_path / "w1")
+    slugs = {f["slug"] for f in marvin.uploads()}
+    assert "transcribe-1-text-2" in slugs and marvin.assets[next(a for a in marvin.assets if marvin.assets[a]["slug"] == "transcribe-1-text")]["metadataJson"] == {"kind": "notes"}
+
+
 # ── describe first ───────────────────────────────────────────────────────────
 @needs_ffmpeg
 def test_a_file_with_no_recording_is_given_one_described_and_transcribed(marvin, heard, tmp_path):

@@ -118,6 +118,26 @@ def _find_asset(ctx: Context, ref: str) -> "dict | None":
     return None if found.get("trashedAt") else found
 
 
+def _slug_clash(e: Exception) -> bool:
+    """Marvin refused an upload because its slug is taken (an asset's slug is unique in the workspace, one in the Trash included)."""
+    said = str(e).lower()
+    return any(word in said for word in ("constraint", "taken", "already"))
+
+
+def _upload_free(ctx: Context, file: Path, slug: str, **fields) -> dict:
+    """Upload under `slug`, or under the first of `slug-2`, `slug-3`... that is free: a slug a file made earlier holds (a job tried again, a
+    poster asked for again) is not an error. Any other refusal is raised as it is."""
+    clash: "Exception | None" = None
+    for n in range(1, 10):
+        try:
+            return marvin_api.upload_asset(ctx.creds, file, slug=slug if n == 1 else f"{slug}-{n}", **fields)
+        except marvin_api.MarvinError as e:
+            if not _slug_clash(e):
+                raise
+            clash = e
+    raise marvin_api.MarvinError(f"no free slug after {slug}: {clash}")
+
+
 def _ours(poster: "dict | None", asset_id: str) -> bool:
     meta = (poster or {}).get("metadataJson") or {}
     return meta.get("kind") == recording.POSTER_KIND and meta.get("video") == asset_id
@@ -127,15 +147,15 @@ def make_poster(ctx: Context, src: Path, total: float, rec_slug: str, asset_id: 
     """The video's poster frame as an image asset: its id, or None (said) when no frame could be pictured. The poster has a fixed slug, so a
     job tried again finds the one it uploaded (unless `force`, which makes a new one). It says what made it: `metadata.worker` and `kind`
     (worker output, never a person's upload) and `derived_from` the video (Marvin files it as a version of the video)."""
-    slug = recording.poster_slug(rec_slug)
+    slug = recording.poster_slug(rec_slug)  # with `force` it is taken, so the new one gets the next free slug (`-2`)
     if not force and _ours(had := _find_asset(ctx, slug), asset_id):
         return str(had["id"])
     out = ctx.work / f"{slug}.jpg"
     at = round(video.poster_at(total), 3)
     try:
         video.poster(src, total, out)
-        made = marvin_api.upload_asset(
-            ctx.creds, out, slug=slug, name=f"Poster: {name}", mime="image/jpeg", description=f"A frame of {name}, about {at:g} s in.",
+        made = _upload_free(
+            ctx, out, slug, name=f"Poster: {name}", mime="image/jpeg", description=f"A frame of {name}, about {at:g} s in.",
             metadata={"kind": recording.POSTER_KIND, "recording": rec_slug, "video": asset_id, "at": at, "derived_from": asset_id, "worker": {"kind": DESCRIBE, "job": job_slug}},
         )  # fmt: skip
     except (ffmpeg.FfmpegError, marvin_api.MarvinError) as e:
@@ -302,8 +322,14 @@ def _upload_files(ctx: Context, files: dict, *, asset_id: str, rec_slug: str, ti
     slug is unique in the workspace, so two files under one slug would refuse the second)."""
     out = {}
     for key, path in files.items():
-        made = marvin_api.upload_asset(
-            ctx.creds, path, slug=f"{files_slug or rec_slug}-{key}", name=f"{FILE_LABEL[key][:1].upper()}{FILE_LABEL[key][1:]}: {title}", mime=FILE_MIME[key],
+        slug = f"{files_slug or rec_slug}-{key}"
+        had = _find_asset(ctx, slug)  # a job tried again finds the file its first try uploaded (a Recording's own, not another file's)
+        meta = (had or {}).get("metadataJson") or {}
+        if meta.get("kind") == TRANSCRIPT_KIND and meta.get("source") == asset_id:
+            out[key] = str(had["id"])
+            continue
+        made = _upload_free(
+            ctx, path, slug, name=f"{FILE_LABEL[key][:1].upper()}{FILE_LABEL[key][1:]}: {title}", mime=FILE_MIME[key],
             description=f"Speech in {title}, as text (faster-whisper).",
             metadata={"kind": TRANSCRIPT_KIND, "source": asset_id, "derived_from": asset_id, "recording": rec_slug, "language": language, "seconds": seconds},
         )  # fmt: skip

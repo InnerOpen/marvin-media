@@ -9,6 +9,7 @@ import importlib
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -17,7 +18,8 @@ PACKAGE = ROOT / "docs" / "media.marvin-package.json"
 MANIFEST = json.loads(PACKAGE.read_text(encoding="utf-8"))
 BLUEPRINTS = {b["slug"]: b for b in MANIFEST["blueprints"]}
 STUDIO_TRANSCRIPT = json.loads((ROOT / "tests" / "data" / "studio_transcript_v229.json").read_text(encoding="utf-8"))
-WORKFLOWS = ("media-recording-on-upload", "media-describe", "media-archive-done-job")
+M1 = json.loads((ROOT / "tests" / "data" / "media_package_m1.json").read_text(encoding="utf-8"))  # the package as m1 shipped it
+WORKFLOWS = ("media-recording-on-upload", "media-describe", "media-archive-done-job", "media-transcribe-recording", "media-transcribe-on-describe")
 
 
 def marvin(module: str):
@@ -37,10 +39,18 @@ def _fields(slug: str) -> dict:
 # ── what it is ───────────────────────────────────────────────────────────────
 def test_the_package_is_media_at_its_own_version_with_exactly_these_pieces():
     assert (MANIFEST["format"], MANIFEST["slug"], MANIFEST["name"]) == (1, "media", "Media")
-    assert MANIFEST["version"].isdigit() and int(MANIFEST["version"]) >= 1
+    assert MANIFEST["version"] == "2"
     assert [(b["kind"], b["slug"]) for b in MANIFEST["blueprints"]] == [
         ("entry_type", "recording"), ("entry_type", "transcript"), ("collection", "media-recordings"), *(("workflow", s) for s in WORKFLOWS),
     ]  # fmt: skip
+
+
+def test_v2_changes_nothing_m1_brought_and_only_adds_the_two_transcribe_workflows():
+    """An update applies what is new; an item m1 brought is left exactly as it was (its on/off state included), so a behaviour change would
+    have to come under a new slug anyway."""
+    assert M1["version"] == "1" and MANIFEST["description"] == M1["description"]
+    assert MANIFEST["blueprints"][: len(M1["blueprints"])] == M1["blueprints"]
+    assert [b["slug"] for b in MANIFEST["blueprints"][len(M1["blueprints"]) :]] == ["media-transcribe-recording", "media-transcribe-on-describe"]
 
 
 def test_it_never_brings_the_worker_types_core_sets_up():
@@ -211,3 +221,119 @@ def test_with_marvins_matcher_finishing_fires_once_and_the_archive_echo_fires_no
     for other in ("render", "transcribe", "audio-cut", "describe-video"):
         assert not matcher.matches(conds, _event(kind=other)), other
     assert not matcher.matches(conds, _event(status="published"))
+
+
+# ── transcribing by hand ─────────────────────────────────────────────────────
+def test_transcribing_by_hand_asks_for_the_file_and_optional_names_and_language_and_always_transcribes_it_again():
+    flow = _flow("media-transcribe-recording")
+    assert flow["trigger"]["type"] == "manual"
+    assert [(i["name"], i["required"]) for i in flow["trigger"]["inputs"]] == [("asset", True), ("hotwords", False), ("language", False)]
+    (act,) = flow["actions"]
+    assert act["entry_type"] == "job" and act["status"] == "draft" and act["title"] == "Transcribe: ${input.asset}"
+    assert act["data"] == {
+        "kind": "media-transcribe", "args": {"asset": "${input.asset}", "hotwords": "${input.hotwords}", "language": "${input.language}", "force": True}, "status": "queued",
+    }  # fmt: skip
+
+
+# ── transcribing what was described ──────────────────────────────────────────
+ON_DESCRIBE = "media-transcribe-on-describe"
+FRESH = {"asset": ID, "kind": "audio", "status": "new"}  # how media-describe makes a Recording: these three only, then the facts in a PATCH
+FACTS = {"source": "recorded", "duration_seconds": 12.5, "has_audio": True, "level_db": -24.0, "status": "described", "job": "describe-1"}
+HEARD = {"language": "en", "text": "Hello, I'm Jared.", "words": [{"text": "Hello,", "start": 0.5, "end": 0.9}], "transcript": "rec-x-transcript", "job": "transcribe-1"}
+
+
+def test_a_described_recording_queues_a_transcribe_job_for_itself():
+    flow = _flow(ON_DESCRIBE)
+    assert flow["trigger"] == {"type": "event", "event": "entry_updated"}
+    (act,) = flow["actions"]
+    assert act["entry_type"] == "job" and act["title"] == "Transcribe: ${entry.title|truncate:60}"
+    assert act["data"] == {"kind": "media-transcribe", "args": {"recording": "${entry.slug}"}, "status": "queued"}
+    bounds = {c["op"]: c["value"] for c in flow["conditions"] if c.get("field") == "entry.data.duration_seconds"}
+    assert bounds == {"gte": 1, "lte": 1800}  # the worker's own bounds (mediajobs.transcribe), editable here
+
+
+def _update(old: dict, new: dict, *, status=("draft", "draft"), entry_type="recording") -> dict:
+    """The context Marvin's engine gives a workflow for one write of a Recording: the diff from Marvin's own entry_service._diff (only the
+    changed fields, values bounded as Marvin bounds them) and the entry as it is after the write."""
+    entry_service = marvin("marvin.services.entries.entry_service")
+    before = SimpleNamespace(status=status[0], title="Take one", slug="rec-x", data_json=old)
+    after = SimpleNamespace(status=status[1], title="Take one", slug="rec-x", data_json=new)
+    changed, was, now = entry_service._diff(before, after)
+    return {
+        "event": {"event_type": "entry_updated", "changed_fields": changed, "before": was, "after": now},
+        "entry": {"entry_type": entry_type, "status": status[1], "title": "Take one", "slug": "rec-x", "data": new, "metadata": {}},
+    }
+
+
+def test_with_marvins_matcher_it_fires_once_on_describe_and_never_on_the_transcribers_own_write():
+    matcher = marvin("marvin.services.automation.matcher")
+    conds = _flow(ON_DESCRIBE)["conditions"]
+    described = {**FRESH, **FACTS}
+    assert matcher.matches(conds, _update(FRESH, described))  # media-describe's PATCH: new -> described
+    for status in ("transcribed", "no-speech"):  # the job's own write moves the status on: changed_to described fails
+        heard = {**described, **HEARD, "status": status} if status == "transcribed" else {**described, "status": status, "text": "", "words": [], "job": "t"}
+        assert not matcher.matches(conds, _update(described, heard)), status
+    transcribed = {**described, **HEARD, "status": "transcribed"}
+    quiet = {
+        "a note typed on a described Recording": (described, {**described, "notes": "Jared, take one"}),
+        "describe again (force) of a described one": (described, {**described, "level_db": -23.5, "job": "describe-2"}),
+        "describe again of a transcribed one (status stays)": (transcribed, {**transcribed, "level_db": -23.5, "job": "describe-2"}),
+        "published": (described, described),
+        "a person setting a transcribed one back to described": (transcribed, {**transcribed, "status": "described"}),
+        "archived as it was described": (FRESH, described),
+    }
+    for why, (old, new) in quiet.items():
+        status = ("draft", "published") if why == "published" else ("draft", "archived") if why.startswith("archived") else ("draft", "draft")
+        assert not matcher.matches(conds, _update(old, new, status=status)), why
+
+
+def test_with_marvins_matcher_it_leaves_alone_what_the_worker_would_refuse_or_has_nothing_to_hear():
+    matcher = marvin("marvin.services.automation.matcher")
+    conds = _flow(ON_DESCRIBE)["conditions"]
+    fires = {
+        "a sound": {},
+        "a video with sound": {"kind": "video", "has_audio": True},
+        "an upload": {"source": "uploaded"},
+        "one second": {"duration_seconds": 1},
+        "half an hour": {"duration_seconds": 1800},
+        "a Recording made by hand that says nothing of its source": {"source": None},
+    }
+    quiet = {
+        "a video with no sound": {"kind": "video", "has_audio": False},
+        "a made voice": {"source": "generated"},
+        "too short": {"duration_seconds": 0.5},
+        "too long": {"duration_seconds": 1801},
+        "no length": {"duration_seconds": None},
+    }
+    for why, change in fires.items():
+        assert matcher.matches(conds, _update(FRESH, {k: v for k, v in {**FRESH, **FACTS, **change}.items() if v is not None})), why
+    for why, change in quiet.items():
+        assert not matcher.matches(conds, _update(FRESH, {k: v for k, v in {**FRESH, **FACTS, **change}.items() if v is not None})), why
+    assert not matcher.matches(conds, _update(FRESH, {**FRESH, **FACTS}, entry_type="take"))  # another package's entry with a status field
+
+
+def test_the_job_queued_by_a_describe_writes_nothing_that_fires_it_again(monkeypatch, tmp_path):
+    """End to end, the job's own writes: media-transcribe run against the stand-in Marvin, and every write it makes to the Recording turned
+    into the event Marvin would send, through Marvin's own diff and matcher. None of them fires the workflow; describe's write did."""
+    from types import SimpleNamespace as NS
+
+    from mediajobs import transcribe
+    from tests.conftest import transcribe as run
+    from tests.fake_marvin import FakeMarvin
+
+    matcher = marvin("marvin.services.automation.matcher")
+    conds = _flow(ON_DESCRIBE)["conditions"]
+    fake = FakeMarvin().wire(monkeypatch)
+    (tmp_path / "t.wav").write_bytes(b"RIFF")
+    fake.add_asset(tmp_path / "t.wav", mime="audio/wav", asset_id=ID)
+    rec = fake.add_entry("recording", "rec-x", {**FRESH, **FACTS})
+    assert matcher.matches(conds, _update(FRESH, rec["dataJson"]))  # describe's write: the one that queues the job
+    words = [NS(word=" Hello", start=0.1, end=0.4)]
+    for said in ([NS(text="Hello", start=0.1, end=0.4, words=words)], []):  # speech, then (forced again) none
+        model = NS(transcribe=lambda path, said=said, **kw: (iter(said), NS(language="en", language_probability=0.9, duration=12.5)))
+        monkeypatch.setattr(transcribe, "load_model", lambda name, model=model: model)
+        monkeypatch.setattr(transcribe, "has_sound", lambda path: True)
+        old = json.loads(json.dumps(rec["dataJson"]))
+        run({"recording": "rec-x", "force": bool(not said)}, tmp_path / f"w{len(said)}")
+        assert rec["dataJson"]["status"] == ("transcribed" if said else "no-speech")
+        assert not matcher.matches(conds, _update(old, rec["dataJson"]))

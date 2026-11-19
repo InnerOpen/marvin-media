@@ -3,7 +3,7 @@
   "slug": "media",
   "name": "Media",
   "description": "A Recording entry for every audio and video file: its length, make, picture, loudness, waveform and poster, measured by the Media worker, and the Transcripts made from them. Every workflow arrives switched off.",
-  "version": "1",
+  "version": "2",
   "blueprints": [
     {
       "kind": "entry_type",
@@ -574,6 +574,157 @@
             {
               "kind": "entry",
               "op": "archive"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "kind": "workflow",
+      "slug": "media-transcribe-recording",
+      "name": "Media: transcribe a recording",
+      "description": "Hear what is said in an audio or video file in the Assets library and write it to its Recording: the language, the words, and each word's start and end; the words, the words with times, in paragraphs and as JSON are kept as files on the Recording's Transcript. A file with no Recording, or one not described yet, is described first. Free, on the Media worker, but heavy on its CPU (minutes for a long recording), and the worker does one job at a time. Only recordings of 1 to 1800 seconds (30 minutes). Asked for by hand, so a recording heard before is heard again, a made voice too.",
+      "required": false,
+      "category": "General",
+      "source": "core",
+      "requires": [
+        "entry_type:job"
+      ],
+      "parameters": [],
+      "payload": {
+        "name": "Media: transcribe a recording",
+        "definition": {
+          "trigger": {
+            "type": "manual",
+            "inputs": [
+              {
+                "name": "asset",
+                "label": "Recording (the audio or video asset's slug or id)",
+                "type": "text",
+                "required": true
+              },
+              {
+                "name": "hotwords",
+                "label": "Names and unusual words to listen for, so they are spelled right (optional)",
+                "type": "text",
+                "required": false,
+                "default": ""
+              },
+              {
+                "name": "language",
+                "label": "Spoken language as a code, e.g. en (optional: empty detects it)",
+                "type": "text",
+                "required": false
+              }
+            ]
+          },
+          "actions": [
+            {
+              "kind": "entry",
+              "op": "create",
+              "entry_type": "job",
+              "title": "Transcribe: ${input.asset}",
+              "status": "draft",
+              "data": {
+                "kind": "media-transcribe",
+                "args": {
+                  "asset": "${input.asset}",
+                  "hotwords": "${input.hotwords}",
+                  "language": "${input.language}",
+                  "force": true
+                },
+                "status": "queued"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "kind": "workflow",
+      "slug": "media-transcribe-on-describe",
+      "name": "Media: transcribe each new recording",
+      "description": "Optional, off until you switch it on. When the Media worker has described a Recording (its Status becomes described) and it has sound, runs 1 to 1800 seconds and was not made by a service, it is transcribed (media-transcribe): its words go on the Recording and its files on a Transcript. Heavy on the CPU: switch it on only if every recording should be transcribed. It fires once per Recording: the transcription's own write moves the Status on to transcribed or no-speech, and describing again never moves it back. Change the length bounds here if you need to; the worker never transcribes more than 1800 seconds.",
+      "required": false,
+      "category": "General",
+      "source": "core",
+      "requires": [
+        "entry_type:job"
+      ],
+      "parameters": [],
+      "payload": {
+        "name": "Media: transcribe each new recording",
+        "definition": {
+          "trigger": {
+            "type": "event",
+            "event": "entry_updated"
+          },
+          "conditions": [
+            {
+              "field": "entry.entry_type",
+              "op": "eq",
+              "value": "recording"
+            },
+            {
+              "field": "entry.data.status",
+              "op": "changed_to",
+              "value": "described"
+            },
+            {
+              "any": [
+                {
+                  "field": "entry.data.has_audio",
+                  "op": "eq",
+                  "value": true
+                },
+                {
+                  "field": "entry.data.kind",
+                  "op": "eq",
+                  "value": "audio"
+                }
+              ]
+            },
+            {
+              "field": "entry.data.duration_seconds",
+              "op": "gte",
+              "value": 1
+            },
+            {
+              "field": "entry.data.duration_seconds",
+              "op": "lte",
+              "value": 1800
+            },
+            {
+              "field": "entry.data.source",
+              "op": "neq",
+              "value": "generated"
+            },
+            {
+              "field": "entry.data.text",
+              "op": "exists",
+              "value": false
+            },
+            {
+              "not": {
+                "field": "entry.status",
+                "op": "changed"
+              }
+            }
+          ],
+          "actions": [
+            {
+              "kind": "entry",
+              "op": "create",
+              "entry_type": "job",
+              "title": "Transcribe: ${entry.title|truncate:60}",
+              "status": "draft",
+              "data": {
+                "kind": "media-transcribe",
+                "args": {
+                  "recording": "${entry.slug}"
+                },
+                "status": "queued"
+              }
             }
           ]
         }

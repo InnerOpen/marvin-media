@@ -7,7 +7,10 @@
 #   MEDIA_WORKSPACE=mash-burn-co docker compose -f docker/compose.yml logs -f
 #
 # MEDIA_VERSION picks the image (default: latest, i.e. the last docker/build.sh); MEDIA_ENV_FILE overrides where the env file is.
-# m1 offers media-describe only. The transcriber (media-transcribe, faster-whisper on the CPU) is m2's.
+# One container offers both kinds, media-describe and media-transcribe, and runs ONE job at a time: a transcription (minutes of CPU for a long
+# file) holds the describes queued behind it until it ends. MEDIA_WHISPER_THREADS caps the cores a transcription takes (default 4; 0 is all).
+# The model is downloaded once into the volume transcribe-models, the one Screenplay Studio's transcriber uses: on a machine without Studio,
+# make it first with `docker volume create transcribe-models`.
 name: media-${MEDIA_WORKSPACE:?set MEDIA_WORKSPACE to the workspace this worker serves, e.g. mash-burn-co}
 
 services:
@@ -19,4 +22,13 @@ services:
     command: python -m marvin_worker work
     environment:
       WORKER_NAME: ${MEDIA_WORKSPACE}-media
-      WORKER_KINDS: media-describe
+      WORKER_KINDS: media-describe,media-transcribe
+      WHISPER_MODEL: ${MEDIA_WHISPER_MODEL:-small}
+      WHISPER_THREADS: ${MEDIA_WHISPER_THREADS:-4}
+    volumes:
+      - transcribe-models:/models   # the transcription model (HF_HOME), downloaded once
+
+volumes:
+  transcribe-models:
+    external: true
+    name: transcribe-models

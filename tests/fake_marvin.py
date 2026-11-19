@@ -23,6 +23,7 @@ class FakeMarvin:
         self.entries: list[dict] = []
         self.assets: dict[str, dict] = {}
         self.files: dict[str, Path] = {}
+        self.blobs: dict[str, bytes] = {}  # what each upload sent, by its new id
         self.writes: list[tuple[str, str]] = []  # (method, path) of every call that changes something
         self.downloads: list[str] = []
         self.before_create = None  # a hook: called with the create's slug just before Marvin makes it (a rival job's create, say)
@@ -136,7 +137,7 @@ class FakeMarvin:
 
     def _upload(self, data: bytes, content_type: str) -> dict:
         boundary = content_type.split("boundary=", 1)[1].encode()
-        fields, blob, filename = {}, b"", "upload.bin"
+        fields, blob, filename, mime = {}, b"", "upload.bin", ""
         for part in data.split(b"--" + boundary):
             head, _, body = part.partition(b"\r\n\r\n")
             name = re.search(rb'name="([^"]+)"', head)
@@ -145,14 +146,16 @@ class FakeMarvin:
             body = body[:-2] if body.endswith(b"\r\n") else body
             if name.group(1) == b"file":
                 blob, filename = body, re.search(rb'filename="([^"]+)"', head).group(1).decode()
+                mime = re.search(rb"Content-Type: ([^\r\n]+)", head).group(1).decode()  # what the worker said the file is
             else:
                 fields[name.group(1).decode()] = body.decode()
         asset_id = str(uuid.uuid4())
         slug = self._free(fields.get("slug") or filename, {a["slug"] for a in self.assets.values()})
         meta = json.loads(fields.get("metadata") or "{}")
-        record = {"id": asset_id, "slug": slug, "name": fields.get("name", filename), "mimeType": "image/jpeg", "originalFilename": filename,
+        record = {"id": asset_id, "slug": slug, "name": fields.get("name", filename), "mimeType": mime, "originalFilename": filename,
                   "metadataJson": meta, "origin": "derived" if meta.get("derived_from") in self.assets else "upload", "trashedAt": None, "uploaded": True, "bytes": len(blob)}  # fmt: skip
         self.assets[asset_id] = record
+        self.blobs[asset_id] = blob
         return record
 
 

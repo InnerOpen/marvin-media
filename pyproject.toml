@@ -1,6 +1,6 @@
 [project]
 name = "marvin-media"
-version = "1"
+version = "2"
 description = "The Media package for Marvin: a Recording entry for every audio and video file, and the worker kinds (media-…) that fill it."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -9,6 +9,8 @@ requires-python = ">=3.11"
 dependencies = []
 
 [project.optional-dependencies]
+# media-transcribe's model (the image installs these; the tests use a stand-in, and the one real-model test is skipped without them).
+model = ["faster-whisper==1.2.1", "av>=14,<17"]
 dev = ["pytest>=8", "pytest-timeout>=2", "ruff>=0.11"]
 
 [build-system]
@@ -21,6 +23,7 @@ packages = ["mediajobs"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+markers = ["slow: runs the real transcription model (skipped where faster-whisper or its cached model is missing)"]
 
 [tool.ruff]
 line-length = 150

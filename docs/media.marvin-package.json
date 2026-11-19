@@ -3,7 +3,7 @@
   "slug": "media",
   "name": "Media",
   "description": "A Recording entry for every audio and video file: its length, make, picture, loudness, waveform and poster, measured by the Media worker, and the Transcripts made from them. Every workflow arrives switched off.",
-  "version": "2",
+  "version": "3",
   "blueprints": [
     {
       "kind": "entry_type",
@@ -724,6 +724,202 @@
                   "recording": "${entry.slug}"
                 },
                 "status": "queued"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "kind": "workflow",
+      "slug": "media-backfill-dry-run",
+      "name": "Media: which files would get a Recording (dry run)",
+      "description": "Asked for by hand. Lists the audio and video files already in the Assets library that a backfill would give a Recording (a person's own recordings and uploads with none yet), and every file it would leave out with the reason: in the Trash, a Recording already, a version of another file, made by a service (ElevenLabs), a voice preview, made by a worker. Writes nothing: the plan is the job's result (open the job). Then run “Media: give existing files a Recording”. Needs a worker that offers media-backfill (see the README).",
+      "required": false,
+      "category": "General",
+      "source": "core",
+      "requires": [
+        "entry_type:job"
+      ],
+      "parameters": [],
+      "payload": {
+        "name": "Media: which files would get a Recording (dry run)",
+        "definition": {
+          "trigger": {
+            "type": "manual",
+            "inputs": [
+              {
+                "name": "limit",
+                "label": "How many files (at most; default 50)",
+                "type": "number",
+                "required": false,
+                "default": 50
+              },
+              {
+                "name": "kinds",
+                "label": "Which files: audio, video or both",
+                "type": "choice",
+                "options": [
+                  "both",
+                  "audio",
+                  "video"
+                ],
+                "required": false,
+                "default": "both"
+              }
+            ]
+          },
+          "actions": [
+            {
+              "kind": "entry",
+              "op": "create",
+              "entry_type": "job",
+              "title": "Backfill (dry run): ${input.kinds}",
+              "status": "draft",
+              "data": {
+                "kind": "media-backfill",
+                "args": {
+                  "limit": "${input.limit}",
+                  "kinds": "${input.kinds}",
+                  "dry_run": true
+                },
+                "status": "queued"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "kind": "workflow",
+      "slug": "media-backfill-run",
+      "name": "Media: give existing files a Recording",
+      "description": "Asked for by hand, after the dry run. Gives up to “How many” audio and video files already in the Assets library a Recording, the oldest first, and describes each (its length, make, loudness, waveform, poster), with the same rules as the dry run. Run it again for the next ones: a file that has a Recording is passed over, so nothing is done twice. Transcribing is off unless you choose it, and heavy on the worker's CPU (minutes per long recording): keep the batches small then. Careful: while “Media: transcribe each new recording” is on, every Recording described here is transcribed too.",
+      "required": false,
+      "category": "General",
+      "source": "core",
+      "requires": [
+        "entry_type:job"
+      ],
+      "parameters": [],
+      "payload": {
+        "name": "Media: give existing files a Recording",
+        "definition": {
+          "trigger": {
+            "type": "manual",
+            "inputs": [
+              {
+                "name": "limit",
+                "label": "How many files (at most; default 50)",
+                "type": "number",
+                "required": false,
+                "default": 50
+              },
+              {
+                "name": "kinds",
+                "label": "Which files: audio, video or both",
+                "type": "choice",
+                "options": [
+                  "both",
+                  "audio",
+                  "video"
+                ],
+                "required": false,
+                "default": "both"
+              },
+              {
+                "name": "describe",
+                "label": "Describe each file (its length, loudness, waveform, poster)",
+                "type": "choice",
+                "options": [
+                  "yes",
+                  "no"
+                ],
+                "required": false,
+                "default": "yes"
+              },
+              {
+                "name": "transcribe",
+                "label": "Transcribe each file too (1 to 1800 seconds; heavy on the CPU)",
+                "type": "choice",
+                "options": [
+                  "no",
+                  "yes"
+                ],
+                "required": false,
+                "default": "no"
+              }
+            ]
+          },
+          "actions": [
+            {
+              "kind": "entry",
+              "op": "create",
+              "entry_type": "job",
+              "title": "Backfill: ${input.limit} ${input.kinds}",
+              "status": "draft",
+              "data": {
+                "kind": "media-backfill",
+                "args": {
+                  "limit": "${input.limit}",
+                  "kinds": "${input.kinds}",
+                  "describe": "${input.describe}",
+                  "transcribe": "${input.transcribe}",
+                  "dry_run": false
+                },
+                "status": "queued"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "kind": "workflow",
+      "slug": "media-recording-asset-trashed",
+      "name": "Media: a Recording goes to the Trash with its file",
+      "description": "Optional, off until you switch it on. When an audio or video file is moved to the Trash, its Recording goes to the Trash too, so no Recording is left without its file. A file deleted forever was in the Trash first, so this covers that too. Restoring the file does not restore its Recording: restore that from the Trash as well. Nothing else is touched: Transcripts and the files they keep stay where they are. Safe to fire twice: a Recording already in the Trash is not found again, and a file with no Recording is passed over. A file with two Recordings (one made by hand) fails the run, which says so: move the extra one to the Trash by hand.",
+      "required": false,
+      "category": "General",
+      "source": "core",
+      "requires": [
+        "entry_type:recording"
+      ],
+      "parameters": [],
+      "payload": {
+        "name": "Media: a Recording goes to the Trash with its file",
+        "definition": {
+          "trigger": {
+            "type": "event",
+            "event": "asset_trashed"
+          },
+          "conditions": [
+            {
+              "any": [
+                {
+                  "field": "asset.mime_type",
+                  "op": "starts_with",
+                  "value": "audio/"
+                },
+                {
+                  "field": "asset.mime_type",
+                  "op": "starts_with",
+                  "value": "video/"
+                }
+              ]
+            }
+          ],
+          "actions": [
+            {
+              "kind": "entry",
+              "op": "trash",
+              "entity_type": "entry",
+              "if_none": "skip",
+              "entity_query": {
+                "entry_type": "recording",
+                "data": {
+                  "asset": "${asset.id}"
+                }
               }
             }
           ]

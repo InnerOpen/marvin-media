@@ -3,20 +3,26 @@ place of another package's kind in an image that loads several (Screenplay Studi
 
 m1: `media-describe`, a Recording entry for one audio or video file, with what the file says about itself.
 m2: `media-transcribe`, what is said in a Recording's file (faster-whisper, on the CPU), on the Recording and in a Transcript's files.
+m3: `media-link`, a Recording joined to the Transcript made earlier from its file; `media-backfill`, a Recording for each of a person's own
+    files already in the library (a dry run first, then a batch at a time).
 
 The worker runs one job at a time (marvin_worker's runner claims a job and runs it to the end in its one loop before it polls again), so a
 long transcription and a describe never share the CPU inside one container: the describe waits."""
 
 import json
+import shutil
 from pathlib import Path
+from urllib.parse import urlencode
 
 from marvin_worker import marvin_api
 from marvin_worker.jobs import Context, JobError, job_kind
 
-from . import audio_measure, ffmpeg, recording, transcribe, video, waveform
+from . import audio_measure, ffmpeg, library, recording, transcribe, video, waveform
 
 DESCRIBE = "media-describe"
 TRANSCRIBE = "media-transcribe"
+LINK = "media-link"
+BACKFILL = "media-backfill"
 TRANSCRIPT_TYPE = "transcript"
 TRANSCRIPT_KIND = "transcript"  # metadata.kind on a transcript file: worker output, as Studio's transcribe marks its files
 
@@ -287,13 +293,15 @@ def described_recording(ctx: Context, args: dict, job_slug: str) -> dict:
     return _row(ctx, said["result"]["recording"]) or {}
 
 
-def _upload_files(ctx: Context, files: dict, *, asset_id: str, rec_slug: str, title: str, job_slug: str, language: str, seconds: float) -> dict:
+def _upload_files(ctx: Context, files: dict, *, asset_id: str, rec_slug: str, title: str, files_slug: str, language: str, seconds: float) -> dict:
     """The transcript's files as assets, each saying what it is (`kind: transcript`), which file it was heard from (`derived_from`, so Marvin
-    files it as a version of the recording, and `source`) and which Recording; the worker adds `metadata.worker` itself. {file: asset id}."""
+    files it as a version of the recording, and `source`) and which Recording; the worker adds `metadata.worker` itself. {file: asset id}.
+    Each slug is `<files_slug>-<file>`: the job's own slug for a transcribe job, one per Recording when a backfill hears several (an asset's
+    slug is unique in the workspace, so two files under one slug would refuse the second)."""
     out = {}
     for key, path in files.items():
         made = marvin_api.upload_asset(
-            ctx.creds, path, slug=f"{job_slug or rec_slug}-{key}", name=f"{FILE_LABEL[key][:1].upper()}{FILE_LABEL[key][1:]}: {title}", mime=FILE_MIME[key],
+            ctx.creds, path, slug=f"{files_slug or rec_slug}-{key}", name=f"{FILE_LABEL[key][:1].upper()}{FILE_LABEL[key][1:]}: {title}", mime=FILE_MIME[key],
             description=f"Speech in {title}, as text (faster-whisper).",
             metadata={"kind": TRANSCRIPT_KIND, "source": asset_id, "derived_from": asset_id, "recording": rec_slug, "language": language, "seconds": seconds},
         )  # fmt: skip
@@ -354,8 +362,13 @@ def keep_transcript(ctx: Context, rec: dict, fields: dict, title: str) -> str:
 )
 def media_transcribe(job: dict, ctx: Context) -> dict:
     """A Recording's file → what is said in it, on the Recording (language, text, words, status) and as files on its Transcript."""
-    args = _args(job)
-    force, job_slug = args.get("force") is True, str(job.get("job") or ctx.name or "")
+    job_slug = str(job.get("job") or ctx.name or "")
+    return transcribe_recording(ctx, _args(job), job_slug, files_slug=job_slug)
+
+
+def transcribe_recording(ctx: Context, args: dict, job_slug: str, *, files_slug: str) -> dict:
+    """media-transcribe's work, for its own job or for a backfill that hears several Recordings in one job (`files_slug` names the files)."""
+    force = args.get("force") is True
     rec = described_recording(ctx, args, job_slug)
     rec_slug, data = str(rec.get("slug") or ""), _data(rec)
 
@@ -387,7 +400,7 @@ def media_transcribe(job: dict, ctx: Context) -> dict:
     if not made["files"]:
         return answer({"status": "no-speech", "text": "", "words": []}, f"no speech heard in {title}", words=0, seconds=made["seconds"])
 
-    files = _upload_files(ctx, made["files"], asset_id=asset_id, rec_slug=rec_slug, title=title, job_slug=job_slug, language=made["language"], seconds=made["seconds"])
+    files = _upload_files(ctx, made["files"], asset_id=asset_id, rec_slug=rec_slug, title=title, files_slug=files_slug, language=made["language"], seconds=made["seconds"])
     fields = {TRANSCRIPT_FIELD[k]: v for k, v in files.items()}
     fields.update(source=asset_id, recording=rec_slug, language=made["language"], duration_seconds=data.get("duration_seconds", made["seconds"]))
     if job_slug:
@@ -399,3 +412,289 @@ def media_transcribe(job: dict, ctx: Context) -> dict:
         said += f" (over {transcribe.WORDS_ON_RECORDING} words: the word times are in the Transcript's JSON file only)"
     put = {"language": made["language"], "text": made["text"], "words": words, "status": "transcribed", "transcript": kept}
     return answer(put, said, language=made["language"], seconds=made["seconds"], segments=made["segments"], words=len(made["words"]), transcript=kept, files=files)
+
+
+# ── media-link ──────────────────────────────────────────────────────────────
+def _transcripts_of_file(ctx: Context, asset_id: str) -> list[dict]:
+    """The Transcripts heard from one file (their `source`), oldest first, the Trash left out: Studio's older ones too, which name the file
+    but no Recording (`transcript-recording-nov-18-2026-54618-pm`)."""
+    spec = {"entry_type": TRANSCRIPT_TYPE, "data": {"source": asset_id}, "sort": {"by": "created_at", "direction": "asc"}}
+    return marvin_api.query(ctx.creds, spec, limit=50)
+
+
+def link_recording(ctx: Context, rec: dict) -> dict:
+    """Join a Recording and the Transcripts made from its file, writing only what differs: the Recording's `transcript` names one (the one it
+    names already while that one is live, else the oldest that names this Recording back, else the oldest heard from the file and naming no
+    Recording), and every Transcript of the file that names no Recording gets this one. A Transcript that names ANOTHER Recording is left as
+    it is and said (a Recording made by hand next to the worker's). {recording, transcript, transcripts, wrote}."""
+    rec_slug, data = str(rec["slug"]), _data(rec)
+    asset_id = str(data.get("asset") or "")
+    if not asset_id:
+        raise JobError(f"the Recording “{rec_slug}” has no file in its asset field")
+    heard = _transcripts_of_file(ctx, asset_id)
+    named = str(data.get("transcript") or "").strip()
+    chosen = _row(ctx, named) if named else None
+    if named and chosen is None:
+        ctx.note(f"{rec_slug} names the Transcript {named}, which is gone (in the Trash?): another is looked for")
+    if chosen is None:
+        free = [t for t in heard if str(_data(t).get("recording") or "") in ("", rec_slug)]
+        chosen = next((t for t in free if _data(t).get("recording") == rec_slug), None) or next(iter(free), None)
+    wrote: list[str] = []
+    if chosen is not None and named != chosen["slug"] and write_entry(ctx, rec_slug, {"transcript": str(chosen["slug"])}):
+        wrote.append(f"{rec_slug}.transcript")
+    for row in heard + ([chosen] if chosen is not None and chosen["slug"] not in {t["slug"] for t in heard} else []):
+        held = str(_data(row).get("recording") or "").strip()
+        if not held:
+            if write_entry(ctx, str(row["slug"]), {"recording": rec_slug}):
+                wrote.append(f"{row['slug']}.recording")
+        elif held != rec_slug:
+            ctx.note(f"the Transcript {row['slug']} names another Recording ({held}): left as it is")
+    return {"recording": rec_slug, "asset": asset_id, "transcript": str(chosen["slug"]) if chosen is not None else None, "transcripts": [str(t["slug"]) for t in heard], "wrote": wrote}
+
+
+@job_kind(
+    LINK,
+    description="Join a Recording to the Transcript made earlier from its file (a Transcript whose source is that file, Studio's older ones included): the Recording's `transcript` names it and the Transcript's `recording` names the Recording back. Only what differs is written; nothing is made, and a Transcript that names another Recording is left as it is. A file with no Recording is said, not made (media-describe makes it)",
+    inputs={
+        "asset": {"type": "asset", "required": False, "accepts": ["audio/*", "video/*"], "description": "the audio or video file (its slug or id)"},
+        "recording": {"type": "string", "required": False, "description": "or the Recording entry's slug"},
+    },
+)
+def media_link(job: dict, ctx: Context) -> dict:
+    """A Recording (by its slug, or its file's) → joined to its file's Transcript."""
+    args = _args(job)
+    ref, rec_ref = str(args.get("asset") or "").strip(), str(args.get("recording") or "").strip()
+    if rec_ref:
+        rec = _row(ctx, rec_ref)
+        if rec is None:
+            raise JobError(f"no Recording “{rec_ref}”")
+    elif ref:
+        try:
+            asset_id = str(marvin_api.asset(ctx.creds, ref)["id"])
+        except marvin_api.MarvinError as e:
+            raise JobError(f"no file “{ref}” ({str(e).splitlines()[0][:160]})") from e
+        rec = next(iter(recordings_of(ctx, asset_id)), None)
+        if rec is None:
+            said = f"“{ref}” has no Recording: nothing to join. Describe it first (media-describe), which makes one."
+            return {"result": {"recording": None, "asset": asset_id, "skipped": True, "summary": said}, "log": said}
+    else:
+        raise JobError("media-link needs args.asset (the file's slug or id) or args.recording (a Recording's slug)")
+    out = link_recording(ctx, rec)
+    if out["transcript"] is None:
+        said = f"{out['recording']}: no Transcript was made from its file"
+    else:
+        said = f"{out['recording']} ↔ {out['transcript']}: " + (", ".join(out["wrote"]) + " written" if out["wrote"] else "joined already")
+    return {"result": {**out, "summary": said}, "log": said}
+
+
+# ── media-backfill ──────────────────────────────────────────────────────────
+LIST_PAGE = 100  # files per page of the library's list
+QUERY_PAGE = 500  # entries per page of a query (Marvin's QUERY_MAX_ROWS)
+MAX_PAGES = 200  # 20,000 files: far past any library this was written for, and a stop for a list that never ends
+SHOWN = 25  # files the plan names under each reason (all are counted)
+LIMIT, MAX_LIMIT = 50, 500
+
+
+def _page_of(body) -> list[dict]:
+    return body if isinstance(body, list) else (body or {}).get("items", [])
+
+
+def library_files(ctx: Context, types: tuple[str, ...], *, trashed: bool = False) -> list[dict]:
+    """Every audio or video file in the Assets library (or, with `trashed`, its Trash), oldest first. Marvin's list pages with `limit` and
+    `offset` (it ignores `per_page`, and gives every file at once without a limit), sorts by when a file was added (`sort=oldest`, then name
+    and id) without returning that date, and says how many there are only in a header this client does not read: so pages are asked for
+    until one comes back short. A file seen twice (one added while paging) is kept once."""
+    rows: list[dict] = []
+    seen: set[str] = set()
+    for page in range(MAX_PAGES):
+        params = [("asset_type", t) for t in types] + [("sort", "oldest"), ("limit", LIST_PAGE), ("offset", page * LIST_PAGE)]
+        if trashed:
+            params.append(("trashed", "true"))
+        got = _page_of(json.loads(marvin_api.request(ctx.creds, "/api/platform/assets?" + urlencode(params))))
+        for row in got:
+            if str(row.get("id")) not in seen:
+                seen.add(str(row.get("id")))
+                rows.append(row)
+        if len(got) < LIST_PAGE:
+            return rows
+    raise JobError(f"the library lists more than {MAX_PAGES * LIST_PAGE} files: too many for one backfill")
+
+
+def all_entries(ctx: Context, spec: dict) -> list[dict]:
+    """Every entry a query matches, a page at a time (marvin_api.query asks for one page only)."""
+    rows: list[dict] = []
+    for page in range(MAX_PAGES):
+        body = json.dumps({"spec": spec, "limit": QUERY_PAGE, "offset": page * QUERY_PAGE}).encode()
+        got = json.loads(marvin_api.request(ctx.creds, "/api/platform/entries/query", method="POST", data=body, content_type="application/json")).get("entries", [])
+        rows.extend(got)
+        if len(got) < QUERY_PAGE:
+            return rows
+    raise JobError(f"more than {MAX_PAGES * QUERY_PAGE} entries match {spec}")
+
+
+def recorded_files(ctx: Context) -> dict[str, str]:
+    """{asset id: `live` or `trashed`}: the files that have a Recording, and where it is. A live Recording wins over one in the Trash."""
+    out = {str(_data(r).get("asset")): "trashed" for r in all_entries(ctx, {"entry_type": recording.ENTRY_TYPE, "status": "trashed"}) if _data(r).get("asset")}
+    out.update({str(_data(r).get("asset")): "live" for r in all_entries(ctx, {"entry_type": recording.ENTRY_TYPE}) if _data(r).get("asset")})
+    return out
+
+
+def voice_previews(ctx: Context) -> set[str]:
+    """The files a `voice` entry (Screenplay Studio's) names as its preview; none where there is no such type."""
+    try:
+        return {str(_data(r)["preview"]) for r in all_entries(ctx, {"entry_type": "voice"}) if _data(r).get("preview")}
+    except marvin_api.MarvinUnreachable:
+        raise
+    except marvin_api.MarvinError as e:
+        ctx.note(f"the voices could not be read ({str(e).splitlines()[0][:120]}): voice previews are known by their name only")
+        return set()
+
+
+def plan_files(rows: list[dict], trash: list[dict], *, recorded: dict, previews: set, include_worker_files: bool, min_bytes: int) -> tuple[list[dict], dict, dict]:
+    """(the files to give a Recording, in order; {reason: count}, the candidates first; {reason: [the first SHOWN files, each with why]})."""
+    todo: list[dict] = []
+    counts: dict[str, int] = {"candidates": 0}
+    shown: dict[str, list[dict]] = {}
+    for row in rows:
+        why = library.reason(row, recorded=recorded, previews=previews, include_worker_files=include_worker_files, min_bytes=min_bytes)
+        if why is None:
+            todo.append(row)
+            continue
+        counts[why[0]] = counts.get(why[0], 0) + 1
+        if len(shown.setdefault(why[0], [])) < SHOWN:
+            shown[why[0]].append({"asset": str(row.get("id")), "name": row.get("name"), "type": row.get("mimeType"), "bytes": row.get("fileSize"), "why": why[1]})
+    counts["candidates"] = len(todo)
+    if trash:
+        counts["trashed"] = len(trash)
+        shown["trashed"] = [{"asset": str(r.get("id")), "name": r.get("name"), "type": r.get("mimeType"), "bytes": r.get("fileSize"), "why": "in the Trash"} for r in trash[:SHOWN]]
+    return todo, counts, shown
+
+
+def _left_out(counts: dict) -> str:
+    parts = [f"{n} {why}" for why, n in sorted(counts.items(), key=lambda kv: -kv[1]) if why != "candidates" and n]
+    return ", ".join(parts) or "nothing"
+
+
+def _backfill_one(ctx: Context, row: dict, job_slug: str, *, describe: bool, hear: bool) -> dict:
+    """One file: its Recording found or made, described (media-describe's own logic, here in this job), joined to an older Transcript of the
+    file (media-link's), and heard if asked (media-transcribe's, unless a Transcript of it exists already). A failure is this file's
+    answer, not the batch's; only Marvin out of reach stops the batch. Each file is downloaded into a folder of its own, removed after it."""
+    asset_id = str(row["id"])
+    name = str(row.get("name") or row.get("slug") or asset_id)
+    out: dict = {"asset": asset_id, "name": name}
+    sub = Context(creds=ctx.creds, work=ctx.work / recording.slug_for(asset_id), name=ctx.name, notes=ctx.notes, began=ctx.began)
+    sub.work.mkdir(parents=True, exist_ok=True)
+    try:
+        rec, made = find_or_create(sub, row, recording.kind_guess(row.get("mimeType"), name))
+        rec_slug = str(rec["slug"])
+        out.update(recording=rec_slug, created=made)
+        if describe:
+            said = media_describe({"job": job_slug, "kind": DESCRIBE, "args": {"recording": rec_slug}}, sub)["result"]
+            out["described"] = not said.get("skipped")
+            if said.get("duration_seconds") is not None:
+                out["seconds"] = said["duration_seconds"]
+        linked = link_recording(sub, _row(sub, rec_slug) or rec)
+        if linked["transcript"]:
+            out["transcript"] = linked["transcript"]
+        if hear and linked["transcript"]:
+            out["transcribed"] = f"no: it has a Transcript already ({linked['transcript']})"
+        elif hear:
+            files_slug = f"{job_slug}-{rec_slug}" if job_slug else rec_slug
+            heard = transcribe_recording(sub, {"recording": rec_slug}, job_slug, files_slug=files_slug)["result"]
+            out["transcribed"] = heard.get("summary") or (f"{heard.get('words', 0)} words" if not heard.get("skipped") else "skipped")
+    except marvin_api.MarvinUnreachable:
+        raise
+    except Exception as e:  # noqa: BLE001 — one file that cannot be read, described or heard is said, and the batch goes on
+        out["error"] = (str(e).splitlines() or [type(e).__name__])[0][:300]
+    finally:
+        shutil.rmtree(sub.work, ignore_errors=True)
+    return out
+
+
+def _outcome(out: dict) -> str:
+    if out.get("error"):
+        return f"FAILED: {out['error']}"
+    said = ("made " if out.get("created") else "found ") + str(out.get("recording"))
+    if "described" in out:
+        said += ", described" + (f" ({out['seconds']:g} s)" if isinstance(out.get("seconds"), (int, float)) else "") if out["described"] else ", described already"
+    if out.get("transcript"):
+        said += f", joined to {out['transcript']}"
+    if out.get("transcribed"):
+        said += f"; transcribed: {out['transcribed']}"
+    return said
+
+
+TRANSCRIBE_WARNING = "If the workflow “Media: transcribe each new recording” is on, every Recording described here is transcribed too (CPU)."
+
+
+@job_kind(
+    BACKFILL,
+    description="Give the audio and video files already in the Assets library a Recording: a person's own recordings and uploads that have none yet. Left out, each with its reason: files in the Trash, files with a Recording (or one in the Trash), versions of another file, files a service made (origin generated: ElevenLabs takes and sounds), ElevenLabs voice previews, and anything a worker made (metadata.worker or metadata.kind; include_worker_files takes those too). A dry run (the default) writes nothing and returns the plan: the count for each reason, the first `limit` files that would get a Recording, and the files left out with why. A real run (dry_run false) does at most `limit` files, oldest first: makes each one's Recording (rec-<12 characters of its id>), describes it (`describe`, default true), joins it to an older Transcript of the file, and transcribes it if asked (`transcribe`, default false: 1 to 1800 seconds, minutes of CPU each). Run it again for the next files: those done have a Recording and are passed over; `after` (the result's `next`) starts after the last one done. `describe`, `transcribe`, `dry_run` and `include_worker_files` take true or false (or yes or no)",
+    inputs={
+        "limit": {"type": "integer", "required": False, "description": f"at most this many files (default {LIMIT}, at most {MAX_LIMIT}); in a dry run, how many are listed"},
+        "kinds": {"type": "string", "required": False, "enum": ["audio", "video", "both"], "description": "which files: audio, video or both (default)"},
+        "after": {"type": "string", "required": False, "description": "start after this file (a file's id: the `next` a run gave)"},
+        "min_bytes": {"type": "integer", "required": False, "description": "leave out files smaller than this many bytes"},
+    },
+    needs=["ffmpeg"],
+)
+def media_backfill(job: dict, ctx: Context) -> dict:
+    """The library's audio and video files → the plan (a dry run), or a Recording for each of the next `limit` that should have one."""
+    args = _args(job)
+    dry = library.flag(args.get("dry_run"), True)
+    limit = library.whole(args.get("limit"), LIMIT, low=1, high=MAX_LIMIT)
+    try:
+        types = library.kinds_of(args.get("kinds"))
+    except ValueError as e:
+        raise JobError(str(e)) from e
+    describe, hear = library.flag(args.get("describe"), True), library.flag(args.get("transcribe"), False)
+    include_worker_files = library.flag(args.get("include_worker_files"), False)
+    min_bytes = library.whole(args.get("min_bytes"), 0, low=0, high=2**53)
+    cursor = str(args.get("after") or "").strip() or None
+    job_slug = str(job.get("job") or ctx.name or "")
+
+    files = library_files(ctx, types)
+    trash = library_files(ctx, types, trashed=True)
+    recorded, previews = recorded_files(ctx), voice_previews(ctx)
+    ctx.note(f"{len(files)} {'/'.join(types)} files in the library, {len(trash)} in the Trash, {sum(v == 'live' for v in recorded.values())} with a Recording")
+    rows, found = library.after(files, cursor)
+    if cursor and not found:
+        ctx.note(f"the file {cursor} (after) is not in the library any more: from the first file again (those done are passed over)")
+    todo, counts, shown = plan_files(rows, trash, recorded=recorded, previews=previews, include_worker_files=include_worker_files, min_bytes=min_bytes)
+    batch = todo[:limit]
+    following = str(batch[-1]["id"]) if len(todo) > limit else None
+    base = {"dry_run": dry, "kinds": list(types), "after": cursor, "library": len(files), "examined": len(rows), "counts": counts}
+
+    if dry:
+        said = (
+            f"Dry run: {len(todo)} of {len(rows)} files would get a Recording" + (f" (the first {len(batch)} are listed)" if len(todo) > len(batch) else "")
+            + f". Left out: {_left_out(counts)}. Nothing was written. " + TRANSCRIBE_WARNING
+        )  # fmt: skip
+        result = {**base, "candidates": [library.candidate(r) for r in batch], "more": len(todo) - len(batch), "skipped": {
+            why: {"count": counts[why], "meaning": library.REASONS[why], "files": shown.get(why, [])} for why in counts if why != "candidates"
+        }, "next": following, "summary": said}  # fmt: skip
+        return {"result": result, "log": said}
+
+    ctx.note(f"{len(todo)} files to give a Recording; this run does {len(batch)}" + (", describing each" if describe else "") + (" and transcribing each" if hear else ""))
+    done: list[dict] = []
+    stopped = None
+    for n, row in enumerate(batch, 1):
+        try:
+            out = _backfill_one(ctx, row, job_slug, describe=describe, hear=hear)
+        except marvin_api.MarvinUnreachable as e:
+            stopped = f"Marvin could not be reached ({str(e).splitlines()[0][:160]}): stopped after {len(done)} files. Run it again to carry on."
+            ctx.note(stopped)
+            break
+        done.append(out)
+        ctx.note(f"[{n}/{len(batch)}] {out['name']}: {_outcome(out)}")
+    last = str(done[-1]["asset"]) if done else cursor
+    following = last if stopped or following else None
+    made = sum(1 for o in done if o.get("created"))
+    failed = sum(1 for o in done if o.get("error"))
+    said = f"{len(done)} files: {made} Recordings made" + (f", {sum(1 for o in done if o.get('described'))} described" if describe else "")
+    said += (f", {sum(1 for o in done if o.get('transcript'))} joined to a Transcript") + (f", {failed} failed" if failed else "")
+    said += f". {len(todo) - len(done)} still to do" + (f": run again with after={following}" if following else "") + "." if len(todo) > len(done) else ". All done: every file that should have a Recording has one."
+    if stopped:
+        said += " " + stopped
+    result = {**base, "done": done, "made": made, "failed": failed, "remaining": len(todo) - len(done), "next": following, "finished": not following and not stopped, "summary": said}
+    return {"result": result, "log": said}

@@ -1,5 +1,6 @@
 # The tests and the lint. The worker kinds run on the generic Marvin worker, a separate public repository (InnerOpen/marvin-worker), checked
-# out next to this one.
+# out next to this one. The package checks run a second time against Marvin itself (the public InnerOpen/marvin), with its own validators and
+# condition matcher, where a missing Marvin fails them instead of skipping them.
 name: tests
 on:
   push:
@@ -35,3 +36,25 @@ jobs:
         working-directory: MarvinMedia
         run: uv run --python 3.12 --extra dev ruff check .
 
+  package-against-marvin:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with: { path: MarvinMedia }
+      - uses: actions/checkout@v4
+        with:
+          repository: InnerOpen/marvin-worker
+          path: MarvinWorker
+      - uses: actions/checkout@v4
+        with:
+          repository: InnerOpen/marvin
+          ref: main
+          path: Marvin
+      - uses: astral-sh/setup-uv@v6
+      - name: The package passes Marvin's own checks
+        working-directory: MarvinMedia
+        env:
+          MEDIA_REQUIRE_MARVIN: "1"
+          PYTHONPATH: ../MarvinWorker:.
+        run: uv run --project ../Marvin --frozen python -m pytest -q -p no:cacheprovider tests/test_package.py

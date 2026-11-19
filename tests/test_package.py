@@ -19,7 +19,12 @@ MANIFEST = json.loads(PACKAGE.read_text(encoding="utf-8"))
 BLUEPRINTS = {b["slug"]: b for b in MANIFEST["blueprints"]}
 STUDIO_TRANSCRIPT = json.loads((ROOT / "tests" / "data" / "studio_transcript_v229.json").read_text(encoding="utf-8"))
 M1 = json.loads((ROOT / "tests" / "data" / "media_package_m1.json").read_text(encoding="utf-8"))  # the package as m1 shipped it
-WORKFLOWS = ("media-recording-on-upload", "media-describe", "media-archive-done-job", "media-transcribe-recording", "media-transcribe-on-describe")
+M2 = (ROOT / "tests" / "data" / "media_package_m2.json").read_text(encoding="utf-8")  # the package file as m2 shipped it, byte for byte
+WORKFLOWS = (
+    "media-recording-on-upload", "media-describe", "media-archive-done-job", "media-transcribe-recording", "media-transcribe-on-describe",
+    "media-backfill-dry-run", "media-backfill-run", "media-recording-asset-trashed",
+)  # fmt: skip
+JOB_WORKFLOWS = tuple(w for w in WORKFLOWS if w != "media-recording-asset-trashed")  # the ones that queue a job
 
 
 def marvin(module: str):
@@ -39,25 +44,37 @@ def _fields(slug: str) -> dict:
 # ── what it is ───────────────────────────────────────────────────────────────
 def test_the_package_is_media_at_its_own_version_with_exactly_these_pieces():
     assert (MANIFEST["format"], MANIFEST["slug"], MANIFEST["name"]) == (1, "media", "Media")
-    assert MANIFEST["version"] == "2"
+    assert MANIFEST["version"] == "3"
     assert [(b["kind"], b["slug"]) for b in MANIFEST["blueprints"]] == [
         ("entry_type", "recording"), ("entry_type", "transcript"), ("collection", "media-recordings"), *(("workflow", s) for s in WORKFLOWS),
     ]  # fmt: skip
 
 
-def test_v2_changes_nothing_m1_brought_and_only_adds_the_two_transcribe_workflows():
+def test_v2_changed_nothing_m1_brought():
     """An update applies what is new; an item m1 brought is left exactly as it was (its on/off state included), so a behaviour change would
     have to come under a new slug anyway."""
     assert M1["version"] == "1" and MANIFEST["description"] == M1["description"]
     assert MANIFEST["blueprints"][: len(M1["blueprints"])] == M1["blueprints"]
-    assert [b["slug"] for b in MANIFEST["blueprints"][len(M1["blueprints"]) :]] == ["media-transcribe-recording", "media-transcribe-on-describe"]
+
+
+def test_v3_changes_nothing_m2_brought_byte_for_byte_and_only_adds_backfill_and_the_trash_workflow():
+    """The file as m2 shipped it, with only its version changed, is where v3's file starts, character for character, up to the end of m2's
+    last item: v3 only adds after it."""
+    m2 = json.loads(M2)
+    assert m2["version"] == "2" and {k: v for k, v in m2.items() if k not in ("version", "blueprints")} == {k: v for k, v in MANIFEST.items() if k not in ("version", "blueprints")}
+    kept = M2.replace('"version": "2"', '"version": "3"', 1)
+    kept = kept[: kept.rindex("\n  ]\n}")]  # up to the closing brace of m2's last item
+    assert PACKAGE.read_text(encoding="utf-8").startswith(kept + ",\n")
+    assert MANIFEST["blueprints"][: len(m2["blueprints"])] == m2["blueprints"]
+    assert [b["slug"] for b in MANIFEST["blueprints"][len(m2["blueprints"]) :]] == ["media-backfill-dry-run", "media-backfill-run", "media-recording-asset-trashed"]
 
 
 def test_it_never_brings_the_worker_types_core_sets_up():
     """job, job-kind and worker are core's (Settings, Workers, "Set up workers"): Media only needs them."""
     assert not {"job", "job-kind", "worker"} & set(BLUEPRINTS)
-    for slug in WORKFLOWS:
+    for slug in JOB_WORKFLOWS:
         assert BLUEPRINTS[slug]["requires"] == ["entry_type:job"], slug
+    assert BLUEPRINTS["media-recording-asset-trashed"]["requires"] == ["entry_type:recording"]  # queues no job: it moves Recordings
 
 
 def test_every_workflow_arrives_switched_off():
@@ -337,3 +354,92 @@ def test_the_job_queued_by_a_describe_writes_nothing_that_fires_it_again(monkeyp
         run({"recording": "rec-x", "force": bool(not said)}, tmp_path / f"w{len(said)}")
         assert rec["dataJson"]["status"] == ("transcribed" if said else "no-speech")
         assert not matcher.matches(conds, _update(old, rec["dataJson"]))
+
+
+# ── backfill (m3) ────────────────────────────────────────────────────────────
+def _run_form(slug: str, given: dict) -> dict:
+    """The job's args a manual run makes from what the Run form was given: Marvin's own input reading (inputs.resolve: a number input becomes
+    a number, a choice stays its text) and template filling (matcher.interpolate)."""
+    inputs = marvin("marvin.services.automation.inputs")
+    matcher = marvin("marvin.services.automation.matcher")
+    flow = _flow(slug)
+    values, _entry = inputs.resolve(None, None, SimpleNamespace(trigger=flow["trigger"]), given)
+    (act,) = flow["actions"]
+    assert act["kind"] == "entry" and act["op"] == "create" and act["entry_type"] == "job" and act["status"] == "draft"
+    assert act["data"]["kind"] == "media-backfill" and act["data"]["status"] == "queued"
+    return matcher.interpolate(act["data"]["args"], {"input": values})
+
+
+def test_the_dry_run_form_always_asks_for_a_dry_run_and_the_worker_takes_its_args():
+    from marvin_worker.jobs import check_args, load_kinds
+
+    load_kinds("mediajobs.jobs")
+    assert _flow("media-backfill-dry-run")["trigger"]["type"] == "manual"
+    assert [(i["name"], i["type"], i["required"]) for i in _flow("media-backfill-dry-run")["trigger"]["inputs"]] == [("limit", "number", False), ("kinds", "choice", False)]
+    for given, expected in (({}, {"limit": 50, "kinds": "both", "dry_run": True}), ({"limit": "20", "kinds": "audio"}, {"limit": 20, "kinds": "audio", "dry_run": True})):
+        args = _run_form("media-backfill-dry-run", given)
+        assert args == expected
+        check_args("media-backfill", args)  # the worker's contract accepts it as it comes
+
+
+def test_the_run_form_never_dry_runs_and_its_yes_or_no_choices_reach_the_worker_as_it_reads_them():
+    from marvin_worker.jobs import check_args, load_kinds
+
+    from mediajobs import library
+
+    load_kinds("mediajobs.jobs")
+    assert [(i["name"], i["type"]) for i in _flow("media-backfill-run")["trigger"]["inputs"]] == [("limit", "number"), ("kinds", "choice"), ("describe", "choice"), ("transcribe", "choice")]
+    args = _run_form("media-backfill-run", {})
+    assert args == {"limit": 50, "kinds": "both", "describe": "yes", "transcribe": "no", "dry_run": False}  # transcribing is chosen, never the default
+    check_args("media-backfill", args)
+    assert library.flag(args["describe"], False) is True and library.flag(args["transcribe"], True) is False and library.flag(args["dry_run"], True) is False
+    args = _run_form("media-backfill-run", {"limit": 5, "kinds": "video", "describe": "no", "transcribe": "yes"})
+    assert args == {"limit": 5, "kinds": "video", "describe": "no", "transcribe": "yes", "dry_run": False}
+    check_args("media-backfill", args)
+    assert library.flag(args["describe"], True) is False and library.flag(args["transcribe"], False) is True
+
+
+# ── a Recording follows its file to the Trash (m3) ──────────────────────────
+TRASHED = "media-recording-asset-trashed"
+
+
+def _trashed(mime: str, *, asset: bool = True) -> dict:
+    """An asset_trashed event's context as Marvin's engine builds it: the asset is still there (in the Trash), so `asset` is bound
+    (engine._item_contexts); after a delete forever it is not."""
+    ctx = {"event": {"event_type": "asset_trashed", "asset_id": ID, "entity_type": "asset", "entity_id": ID}}
+    if asset:
+        ctx["asset"] = {"id": ID, "name": "r", "mime_type": mime, "metadata": {}, "trashed": True, "derived_from": None, "origin": "upload"}
+    return ctx
+
+
+def test_a_trashed_recording_file_moves_its_recording_to_the_trash_and_nothing_else():
+    flow = _flow(TRASHED)
+    assert flow["trigger"] == {"type": "event", "event": "asset_trashed"} and "target" not in flow
+    (act,) = flow["actions"]
+    assert act == {"kind": "entry", "op": "trash", "entity_type": "entry", "if_none": "skip", "entity_query": {"entry_type": "recording", "data": {"asset": "${asset.id}"}}}
+    # Why `entity_type: entry` is spelled out: on an asset event a bare `trash` acts on the event's subject, the file itself (Marvin's rule).
+    entry_actions = marvin("marvin.services.automation.actions.entry")
+    assert entry_actions.subject_kind(_trashed("audio/mpeg")) == "asset" and "trash" in entry_actions.ITEM_OPS
+
+
+def test_with_marvins_matcher_only_an_audio_or_video_file_in_the_trash_looks_for_its_recording():
+    matcher = marvin("marvin.services.automation.matcher")
+    flow = _flow(TRASHED)
+    conds, (act,) = flow["conditions"], flow["actions"]
+    for mime in ("audio/webm;codecs=opus", "audio/mpeg", "audio/wav", "video/mp4", "video/webm"):
+        ctx = _trashed(mime)
+        assert matcher.matches(conds, ctx), mime
+        assert matcher.interpolate(act["entity_query"], ctx) == {"entry_type": "recording", "data": {"asset": ID}}
+    for mime in ("image/jpeg", "text/plain", "application/json"):  # a poster (trashed with its video), a transcript's files
+        assert not matcher.matches(conds, _trashed(mime)), mime
+    assert not matcher.matches(conds, _trashed("audio/mpeg", asset=False))  # no file to read: nothing is looked for
+    assert matcher.interpolate(act["entity_query"], _trashed("audio/mpeg", asset=False))["data"] == {"asset": None}  # and an empty value matches nothing
+
+
+def test_moving_a_recording_to_the_trash_cannot_set_the_workflow_off_again():
+    """The step sends entry_trashed for the Recording; the workflow hears only asset_trashed. A second asset_trashed (the file restored and
+    trashed again) finds no Recording outside the Trash, and `if_none: skip` ends that run quietly instead of failing it."""
+    flow = _flow(TRASHED)
+    assert flow["trigger"]["event"] == "asset_trashed"
+    entry_actions = marvin("marvin.services.automation.actions.entry")
+    assert entry_actions.IF_NONE_SKIP == flow["actions"][0]["if_none"]

@@ -1,6 +1,6 @@
 # The Media worker: the generic Marvin worker (`marvin-worker-base`, built from InnerOpen/marvin-worker) plus ffmpeg and the `mediajobs`
-# kinds the Media package (docs/media.marvin-package.json) hands to a worker: media-describe (m1) and media-transcribe (m2, faster-whisper on
-# the CPU). The image is tagged with the package version it goes with (m1, m2...). Build with docker/build.sh (the build context is the repository root).
+# kinds the Media package (docs/media.marvin-package.json) hands to a worker: media-describe (m1), media-transcribe (m2, faster-whisper on
+# the CPU), media-link and media-backfill (m3). The image is tagged with the package version it goes with (m1, m2...). Build with docker/build.sh (the build context is the repository root).
 #
 # The chain (design §6): marvin-worker-base -> marvin-media-worker:mN -> (from P6) screenplay-studio-worker:vNNN, which builds FROM this one.
 # BASE names the base image, so a check can build against a base of its own without retagging the shared `marvin-worker-base`.

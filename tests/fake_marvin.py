@@ -2,7 +2,11 @@
 `query`, `create_entry`, `update_entry`, `asset`, `download_asset`, `upload_asset`. It keeps entries and assets in memory and behaves as Marvin
 does where that matters here:
 - a create whose slug is taken gets the next free one (`slug-2`), a slug in the Trash included (Marvin's unique index covers it);
-- a query leaves the Trash out; an asset looked up by a slug that is not an id is a 404, then found by `?q=`;
+- a query leaves the Trash out (unless it names the status `trashed`) and pages with `limit` and `offset`;
+- the library's list (`GET /assets`) filters by `asset_type`, leaves the Trash out (or lists only it, `trashed=true`), sorts oldest first
+  (`sort=oldest`: the order the assets were added) and pages with `limit` and `offset`; an asset looked up by a slug that is not an id is a
+  404, then found by `?q=`;
+- with `strict_asset_slugs`, an upload under a slug another asset has is refused, as Marvin's unique (workspace, slug) index refuses it;
 - every write is logged, so a test can say "nothing was written"."""
 
 import json
@@ -28,13 +32,20 @@ class FakeMarvin:
         self.downloads: list[str] = []
         self.before_create = None  # a hook: called with the create's slug just before Marvin makes it (a rival job's create, say)
         self.fail_entry_patch = False
+        self.strict_asset_slugs = False
+        self.lists: list[dict] = []  # the query string of every library list asked for (paging checks)
 
     # ── set-up ─────────────────────────────────────────────────────────────
-    def add_asset(self, file: "Path | None", *, mime: str, name: str = "", meta: dict | None = None, origin: str = "upload", asset_id: str = "", slug: str = "") -> dict:
+    def add_asset(
+        self, file: "Path | None", *, mime: str, name: str = "", meta: dict | None = None, origin: str = "upload", asset_id: str = "", slug: str = "",
+        description: str = "", source: str | None = None, size: int | None = None, trashed: bool = False,
+    ) -> dict:  # fmt: skip
         asset_id = asset_id or str(uuid.uuid4())
         name = name or (file.name if file else "file")
+        size = size if size is not None else (file.stat().st_size if file and file.exists() else 1000)
         record = {"id": asset_id, "slug": slug or re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-"), "name": name, "mimeType": mime,
-                  "originalFilename": file.name if file else name, "metadataJson": dict(meta or {}), "origin": origin, "trashedAt": None}  # fmt: skip
+                  "assetType": _asset_type(mime), "originalFilename": file.name if file else name, "metadataJson": dict(meta or {}), "origin": origin,
+                  "sourceAssetId": source, "fileSize": size, "description": description or None, "trashedAt": "2026-11-01T00:00:00Z" if trashed else None}  # fmt: skip
         self.assets[asset_id] = record
         if file:
             self.files[asset_id] = file
@@ -70,7 +81,10 @@ class FakeMarvin:
         if rest == ["entry-types"] and method == "GET":
             return _json([{"slug": s, "id": i} for s, i in self.types.items()])
         if rest == ["entries", "query"] and method == "POST":
-            return _json({"entries": self._query(json.loads(data)["spec"])})
+            body = json.loads(data)
+            rows = self._query(body["spec"])
+            offset, limit = int(body.get("offset") or 0), int(body.get("limit") or 100)
+            return _json({"entries": rows[offset : offset + min(limit, 500)]})
         if rest == ["entries"] and method == "POST":
             return _json(self._create(json.loads(data)))
         if len(rest) == 2 and rest[0] == "entries":
@@ -87,8 +101,11 @@ class FakeMarvin:
                 row["status"] = "trashed"
                 return b""
         if rest == ["assets"] and method == "GET":
-            q = parse_qs(url.query).get("q", [""])[0]
-            return _json([a for a in self.assets.values() if q in (a["slug"], a["name"]) or q in a["slug"]])
+            params = parse_qs(url.query)
+            if "q" in params:
+                q = params["q"][0]
+                return _json([a for a in self.assets.values() if not a["trashedAt"] and (q in (a["slug"], a["name"]) or q in a["slug"])])
+            return _json(self._list(params))
         if rest == ["assets", "upload"] and method == "POST":
             return _json(self._upload(data, content_type))
         if len(rest) >= 2 and rest[0] == "assets":
@@ -108,8 +125,20 @@ class FakeMarvin:
                 return b""
         raise AssertionError(f"the fake Marvin has no {method} {path}")
 
+    def _list(self, params: dict) -> list[dict]:
+        """The library as Marvin's list gives it. Only what the worker asks for is understood; anything else fails the test."""
+        assert set(params) <= {"asset_type", "sort", "limit", "offset", "trashed"}, params
+        assert params.get("sort") == ["oldest"], "the worker pages the library oldest first, so a page never moves under it"
+        self.lists.append({k: v if k == "asset_type" else v[0] for k, v in params.items()})
+        trashed = params.get("trashed") == ["true"]
+        rows = [a for a in self.assets.values() if bool(a["trashedAt"]) == trashed and (not params.get("asset_type") or a.get("assetType") in params["asset_type"])]
+        offset = int(params.get("offset", ["0"])[0])
+        limit = int(params["limit"][0]) if "limit" in params else len(rows)
+        return [json.loads(json.dumps(a)) for a in rows[offset : offset + limit]]
+
     def _query(self, spec: dict) -> list[dict]:
-        rows = [e for e in self.entries if e["status"] != "trashed"]
+        trashed = spec.get("status") == "trashed"
+        rows = [e for e in self.entries if (e["status"] == "trashed") == trashed]
         if "entries" in spec:
             wanted = {str(spec["entries"])}
             rows = [e for e in rows if e["slug"] in wanted or e["id"] in wanted]
@@ -150,13 +179,22 @@ class FakeMarvin:
             else:
                 fields[name.group(1).decode()] = body.decode()
         asset_id = str(uuid.uuid4())
-        slug = self._free(fields.get("slug") or filename, {a["slug"] for a in self.assets.values()})
+        taken = {a["slug"] for a in self.assets.values()}
+        if self.strict_asset_slugs and fields.get("slug") in taken:
+            raise marvin_api.MarvinError(f"Marvin answered 409 for /api/platform/assets/upload: the slug {fields['slug']} is taken")
+        slug = self._free(fields.get("slug") or filename, taken)
         meta = json.loads(fields.get("metadata") or "{}")
-        record = {"id": asset_id, "slug": slug, "name": fields.get("name", filename), "mimeType": mime, "originalFilename": filename,
-                  "metadataJson": meta, "origin": "derived" if meta.get("derived_from") in self.assets else "upload", "trashedAt": None, "uploaded": True, "bytes": len(blob)}  # fmt: skip
+        source = meta.get("derived_from") if meta.get("derived_from") in self.assets else None
+        record = {"id": asset_id, "slug": slug, "name": fields.get("name", filename), "mimeType": mime, "assetType": _asset_type(mime), "originalFilename": filename,
+                  "metadataJson": meta, "origin": "derived" if source else "upload", "sourceAssetId": source, "fileSize": len(blob), "trashedAt": None, "uploaded": True, "bytes": len(blob)}  # fmt: skip
         self.assets[asset_id] = record
         self.blobs[asset_id] = blob
         return record
+
+
+def _asset_type(mime: str) -> str:
+    """Marvin's coarse bucket for a type, as far as these tests need it."""
+    return next((t for t in ("audio", "video", "image") if mime.startswith(t + "/")), "other")
 
 
 def _json(value) -> bytes:

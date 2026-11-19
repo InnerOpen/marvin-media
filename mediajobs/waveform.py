@@ -1,5 +1,6 @@
-# Copied from ScreenplayStudio render/storyrender/waveform.py at 09bef82 (v229), unchanged below this header, so a file described here gives the same
-# numbers as Studio's own jobs. Studio keeps its copy until P6, when it imports this one instead (see README, "Where the code came from").
+# Shared with Screenplay Studio: from P6 its storyrender imports this module (storyrender.waveform is this module), so Studio's renders and
+# describe jobs run this very code. It came from Studio's render/storyrender/waveform.py at 09bef82 (v229). A change here changes what Studio renders: Studio's
+# render goldens (CI job studio-on-this-mediajobs) and tests/test_parity.py must pass (see README, "Shared with Screenplay Studio").
 """A recording's waveform, as the peaks the Timeline draws in its block. The browser cannot decode a stored take (the assets host sends no CORS
 headers), so the worker does, once, when a take is attached: ffmpeg decodes it to 8 kHz mono, and the loudest and quietest sample of each stretch
 are kept, 8-bit, in the audiowaveform JSON format ({version 2, bits 8, data: [min, max, …]}) that the Timeline and other tools read."""

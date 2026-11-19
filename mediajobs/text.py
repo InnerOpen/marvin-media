@@ -1,5 +1,5 @@
-"""The transcript's three forms, from the segments the model returns: [{start, end, text}] in seconds. Copied from Screenplay Studio's
-storytranscribe/text.py (v231), unchanged but for this line, until P6 makes Studio import it from here."""
+"""The transcript's three forms, from the segments the model returns: [{start, end, text}] in seconds. Shared with Screenplay Studio:
+from P6 its storytranscribe.text is this module (it came from there at v231, unchanged but for this docstring)."""
 
 from __future__ import annotations
 

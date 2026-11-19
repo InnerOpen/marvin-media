@@ -1,0 +1,866 @@
+{
+ "studio": "v232 (64c1cb9), docs/screenplay-studio.marvin-package.json",
+ "types": {
+  "beat": [
+   {
+    "key": "number",
+    "type": "text"
+   },
+   {
+    "key": "story",
+    "type": "text"
+   },
+   {
+    "key": "chapter",
+    "type": "text"
+   },
+   {
+    "key": "band",
+    "type": "text"
+   },
+   {
+    "key": "scene",
+    "type": "text"
+   },
+   {
+    "key": "time_of_day",
+    "type": "text"
+   },
+   {
+    "key": "status",
+    "type": "select",
+    "options": [
+     "draft",
+     "queued",
+     "made",
+     "approved",
+     "redo"
+    ],
+    "defaultValue": "draft"
+   },
+   {
+    "key": "shows",
+    "type": "select",
+    "options": [
+     "Picture",
+     "Plain card"
+    ]
+   },
+   {
+    "key": "picture",
+    "type": "textarea"
+   },
+   {
+    "key": "direction",
+    "type": "textarea"
+   },
+   {
+    "key": "expression",
+    "type": "textarea"
+   },
+   {
+    "key": "focus",
+    "type": "text"
+   },
+   {
+    "key": "cast",
+    "type": "text"
+   },
+   {
+    "key": "still",
+    "type": "asset",
+    "accept": "image/*"
+   },
+   {
+    "key": "references",
+    "type": "asset-list",
+    "accept": "image/*"
+   },
+   {
+    "key": "changes",
+    "type": "text"
+   },
+   {
+    "key": "hold_seconds",
+    "type": "number",
+    "min": 0
+   },
+   {
+    "key": "lead_seconds",
+    "type": "number",
+    "min": 0,
+    "max": 30
+   },
+   {
+    "key": "gap_seconds",
+    "type": "number",
+    "min": 0,
+    "max": 10
+   },
+   {
+    "key": "tail_seconds",
+    "type": "number",
+    "min": 0,
+    "max": 30
+   },
+   {
+    "key": "starts_during",
+    "type": "json"
+   },
+   {
+    "key": "camera",
+    "type": "select",
+    "options": [
+     "Still",
+     "Push in",
+     "Pull out",
+     "Zoom in",
+     "Zoom out",
+     "Pan left",
+     "Pan right",
+     "Tilt up",
+     "Tilt down",
+     "Pedestal up",
+     "Pedestal down",
+     "Truck left",
+     "Truck right",
+     "Rocking",
+     "Heavy rocking",
+     "Drift"
+    ]
+   },
+   {
+    "key": "move",
+    "type": "json"
+   },
+   {
+    "key": "transition",
+    "type": "select",
+    "options": [
+     "cut",
+     "fade",
+     "dissolve"
+    ]
+   },
+   {
+    "key": "transition_seconds",
+    "type": "number",
+    "min": 0.1,
+    "max": 5
+   },
+   {
+    "key": "picture_lead",
+    "type": "number",
+    "min": 0,
+    "max": 5
+   },
+   {
+    "key": "sounds",
+    "type": "json"
+   },
+   {
+    "key": "cues",
+    "type": "json"
+   },
+   {
+    "key": "audio_notes",
+    "type": "textarea"
+   },
+   {
+    "key": "ambience",
+    "type": "text"
+   },
+   {
+    "key": "ambience_volume",
+    "type": "number",
+    "min": 0,
+    "max": 1
+   },
+   {
+    "key": "ambience_fade_in",
+    "type": "number",
+    "min": 0,
+    "max": 10
+   },
+   {
+    "key": "ambience_fade_out",
+    "type": "number",
+    "min": 0,
+    "max": 10
+   },
+   {
+    "key": "ambience_heard",
+    "type": "select",
+    "options": [
+     "muffled",
+     "clear"
+    ]
+   },
+   {
+    "key": "story_ambience_volume",
+    "type": "number",
+    "min": 0,
+    "max": 1
+   },
+   {
+    "key": "music_volume",
+    "type": "number",
+    "min": 0,
+    "max": 1
+   },
+   {
+    "key": "music_fade_in",
+    "type": "number",
+    "min": 0,
+    "max": 10
+   },
+   {
+    "key": "music_fade_out",
+    "type": "number",
+    "min": 0,
+    "max": 10
+   },
+   {
+    "key": "overlay",
+    "type": "asset",
+    "accept": "video/mp4,video/webm,video/quicktime,image/png,image/gif,image/webp"
+   },
+   {
+    "key": "overlay_blend",
+    "type": "select",
+    "options": [
+     "normal",
+     "screen",
+     "multiply",
+     "overlay",
+     "lighten",
+     "addition",
+     "none"
+    ]
+   },
+   {
+    "key": "overlay_opacity",
+    "type": "number",
+    "min": 0,
+    "max": 1
+   },
+   {
+    "key": "overlay_play",
+    "type": "select",
+    "options": [
+     "loop",
+     "once"
+    ]
+   },
+   {
+    "key": "overlay_fade",
+    "type": "number",
+    "min": 0,
+    "max": 10
+   },
+   {
+    "key": "overlay_delay",
+    "type": "number",
+    "min": 0,
+    "max": 60
+   },
+   {
+    "key": "gen_video_status",
+    "type": "select",
+    "options": [
+     "draft",
+     "queued",
+     "ready",
+     "kept",
+     "redo",
+     "failed"
+    ],
+    "defaultValue": "draft",
+    "readOnly": true
+   },
+   {
+    "key": "gen_video_prompt",
+    "type": "textarea"
+   },
+   {
+    "key": "gen_video_seconds",
+    "type": "select",
+    "options": [
+     "4",
+     "6",
+     "8"
+    ],
+    "defaultValue": "6"
+   },
+   {
+    "key": "gen_video",
+    "type": "asset",
+    "accept": "video/mp4",
+    "readOnly": true
+   },
+   {
+    "key": "gen_video_note",
+    "type": "text",
+    "readOnly": true
+   },
+   {
+    "key": "gen_video_previous_overlay",
+    "type": "asset",
+    "accept": "video/mp4,video/webm,video/quicktime,image/png,image/gif,image/webp",
+    "readOnly": true
+   },
+   {
+    "key": "info_label",
+    "type": "text"
+   },
+   {
+    "key": "info_title",
+    "type": "text"
+   },
+   {
+    "key": "info_text",
+    "type": "textarea"
+   },
+   {
+    "key": "info_icon",
+    "type": "asset",
+    "accept": "image/png,image/jpeg,image/webp"
+   },
+   {
+    "key": "info_dim",
+    "type": "number",
+    "min": 0,
+    "max": 1
+   },
+   {
+    "key": "clip",
+    "type": "asset",
+    "accept": "video/webm,video/mp4,video/quicktime"
+   },
+   {
+    "key": "clip_look",
+    "type": "select",
+    "options": [
+     "pip",
+     "full"
+    ]
+   },
+   {
+    "key": "clip_corner",
+    "type": "select",
+    "options": [
+     "top-left",
+     "top-right",
+     "bottom-left",
+     "bottom-right"
+    ]
+   },
+   {
+    "key": "clip_size",
+    "type": "number",
+    "min": 0.15,
+    "max": 0.5
+   },
+   {
+    "key": "clip_shape",
+    "type": "select",
+    "options": [
+     "circle",
+     "rounded",
+     "square"
+    ]
+   },
+   {
+    "key": "clip_audio",
+    "type": "boolean",
+    "defaultValue": true
+   },
+   {
+    "key": "clip_volume",
+    "type": "number",
+    "min": 0,
+    "max": 1
+   },
+   {
+    "key": "clip_start",
+    "type": "number",
+    "min": 0
+   },
+   {
+    "key": "clip_end",
+    "type": "number",
+    "min": 0
+   },
+   {
+    "key": "clip_seconds",
+    "type": "number",
+    "readOnly": true
+   },
+   {
+    "key": "clip_width",
+    "type": "number",
+    "readOnly": true
+   },
+   {
+    "key": "clip_height",
+    "type": "number",
+    "readOnly": true
+   },
+   {
+    "key": "clip_has_audio",
+    "type": "boolean",
+    "readOnly": true
+   },
+   {
+    "key": "clip_poster",
+    "type": "asset",
+    "accept": "image/jpeg,image/*",
+    "readOnly": true
+   },
+   {
+    "key": "clip_text",
+    "type": "textarea",
+    "readOnly": true
+   },
+   {
+    "key": "clip_words",
+    "type": "json",
+    "readOnly": true
+   },
+   {
+    "key": "fountain",
+    "type": "textarea"
+   },
+   {
+    "key": "transition_text",
+    "type": "text"
+   },
+   {
+    "key": "spend_approved",
+    "type": "text",
+    "readOnly": true
+   }
+  ],
+  "sound": [
+   {
+    "key": "story",
+    "type": "text"
+   },
+   {
+    "key": "prompt",
+    "type": "textarea"
+   },
+   {
+    "key": "kind",
+    "type": "select",
+    "options": [
+     "effect",
+     "ambience",
+     "music"
+    ],
+    "defaultValue": "effect"
+   },
+   {
+    "key": "status",
+    "type": "select",
+    "options": [
+     "draft",
+     "queued",
+     "recorded",
+     "approved",
+     "redo"
+    ],
+    "defaultValue": "draft"
+   },
+   {
+    "key": "audio",
+    "type": "asset",
+    "accept": "audio/*"
+   },
+   {
+    "key": "level_db",
+    "type": "number",
+    "min": -60,
+    "max": 0,
+    "readOnly": true
+   },
+   {
+    "key": "peak_db",
+    "type": "number",
+    "min": -60,
+    "max": 0,
+    "readOnly": true
+   },
+   {
+    "key": "volume",
+    "type": "number",
+    "min": 0,
+    "max": 1,
+    "defaultValue": 0.6
+   },
+   {
+    "key": "take_notes",
+    "type": "textarea"
+   },
+   {
+    "key": "loop",
+    "type": "boolean",
+    "defaultValue": false
+   },
+   {
+    "key": "fade_in",
+    "type": "number",
+    "min": 0,
+    "max": 10
+   },
+   {
+    "key": "fade_out",
+    "type": "number",
+    "min": 0,
+    "max": 10
+   },
+   {
+    "key": "source",
+    "type": "select",
+    "options": [
+     "generated",
+     "uploaded",
+     "recorded"
+    ],
+    "defaultValue": "generated"
+   },
+   {
+    "key": "duration_seconds",
+    "type": "number",
+    "min": 0,
+    "max": 3600
+   },
+   {
+    "key": "prompt_influence",
+    "type": "number",
+    "min": 0,
+    "max": 1
+   },
+   {
+    "key": "model",
+    "type": "select",
+    "options": [
+     "eleven_text_to_sound_v2",
+     "eleven_text_to_sound_v3"
+    ]
+   },
+   {
+    "key": "spend_approved",
+    "type": "text",
+    "readOnly": true
+   },
+   {
+    "key": "waveform",
+    "type": "json",
+    "readOnly": true
+   }
+  ],
+  "speech-line": [
+   {
+    "key": "story",
+    "type": "text"
+   },
+   {
+    "key": "beat",
+    "type": "text"
+   },
+   {
+    "key": "speaker",
+    "type": "text"
+   },
+   {
+    "key": "character",
+    "type": "text"
+   },
+   {
+    "key": "text",
+    "type": "textarea"
+   },
+   {
+    "key": "status",
+    "type": "select",
+    "options": [
+     "draft",
+     "queued",
+     "recorded",
+     "approved",
+     "redo"
+    ],
+    "defaultValue": "draft"
+   },
+   {
+    "key": "order",
+    "type": "number",
+    "min": 0
+   },
+   {
+    "key": "leave_out",
+    "type": "boolean"
+   },
+   {
+    "key": "source",
+    "type": "select",
+    "options": [
+     "generated",
+     "uploaded",
+     "recorded"
+    ],
+    "defaultValue": "generated"
+   },
+   {
+    "key": "audio",
+    "type": "asset",
+    "accept": "audio/*"
+   },
+   {
+    "key": "duration_seconds",
+    "type": "number",
+    "min": 0
+   },
+   {
+    "key": "words",
+    "type": "json"
+   },
+   {
+    "key": "take_notes",
+    "type": "textarea"
+   },
+   {
+    "key": "volume",
+    "type": "number",
+    "min": 0,
+    "max": 1
+   },
+   {
+    "key": "muffled",
+    "type": "boolean"
+   },
+   {
+    "key": "nudge",
+    "type": "number",
+    "min": -10,
+    "max": 10
+   },
+   {
+    "key": "extension",
+    "type": "select",
+    "options": [
+     "V.O.",
+     "O.S.",
+     "O.C."
+    ]
+   },
+   {
+    "key": "direction",
+    "type": "textarea"
+   },
+   {
+    "key": "delivery_text",
+    "type": "textarea"
+   },
+   {
+    "key": "simultaneous",
+    "type": "boolean"
+   },
+   {
+    "key": "caption",
+    "type": "textarea"
+   },
+   {
+    "key": "voice",
+    "type": "text"
+   },
+   {
+    "key": "engine",
+    "type": "text"
+   },
+   {
+    "key": "model",
+    "type": "text"
+   },
+   {
+    "key": "stability",
+    "type": "number",
+    "min": 0,
+    "max": 1
+   },
+   {
+    "key": "similarity_boost",
+    "type": "number",
+    "min": 0,
+    "max": 1
+   },
+   {
+    "key": "style",
+    "type": "number",
+    "min": 0,
+    "max": 1
+   },
+   {
+    "key": "speed",
+    "type": "number",
+    "min": 0.7,
+    "max": 1.2
+   },
+   {
+    "key": "fountain",
+    "type": "textarea"
+   },
+   {
+    "key": "waveform",
+    "type": "json",
+    "readOnly": true
+   }
+  ],
+  "take": [
+   {
+    "key": "line",
+    "type": "text"
+   },
+   {
+    "key": "story",
+    "type": "text"
+   },
+   {
+    "key": "status",
+    "type": "select",
+    "options": [
+     "draft",
+     "queued",
+     "recorded",
+     "in_use",
+     "redo"
+    ],
+    "defaultValue": "recorded"
+   },
+   {
+    "key": "spoken",
+    "type": "textarea"
+   },
+   {
+    "key": "direction",
+    "type": "textarea"
+   },
+   {
+    "key": "notes",
+    "type": "textarea"
+   },
+   {
+    "key": "source",
+    "type": "select",
+    "options": [
+     "generated",
+     "uploaded",
+     "recorded"
+    ]
+   },
+   {
+    "key": "audio",
+    "type": "asset",
+    "accept": "audio/*"
+   },
+   {
+    "key": "duration_seconds",
+    "type": "number"
+   },
+   {
+    "key": "format",
+    "type": "text",
+    "readOnly": true
+   },
+   {
+    "key": "level_lufs",
+    "type": "number",
+    "readOnly": true
+   },
+   {
+    "key": "rms_db",
+    "type": "number",
+    "readOnly": true
+   },
+   {
+    "key": "peak_db",
+    "type": "number",
+    "readOnly": true
+   },
+   {
+    "key": "noise_floor_db",
+    "type": "number",
+    "readOnly": true
+   },
+   {
+    "key": "clipped",
+    "type": "select",
+    "options": [
+     "no",
+     "yes"
+    ],
+    "readOnly": true
+   },
+   {
+    "key": "lead_silence",
+    "type": "number",
+    "readOnly": true
+   },
+   {
+    "key": "tail_silence",
+    "type": "number",
+    "readOnly": true
+   },
+   {
+    "key": "heard",
+    "type": "textarea",
+    "readOnly": true
+   },
+   {
+    "key": "language",
+    "type": "text",
+    "readOnly": true
+   },
+   {
+    "key": "words_per_minute",
+    "type": "number",
+    "readOnly": true
+   },
+   {
+    "key": "match",
+    "type": "number",
+    "readOnly": true
+   },
+   {
+    "key": "voice",
+    "type": "text"
+   },
+   {
+    "key": "model",
+    "type": "text"
+   },
+   {
+    "key": "stability",
+    "type": "number"
+   },
+   {
+    "key": "similarity_boost",
+    "type": "number"
+   },
+   {
+    "key": "style",
+    "type": "number"
+   },
+   {
+    "key": "speed",
+    "type": "number"
+   },
+   {
+    "key": "waveform",
+    "type": "json",
+    "readOnly": true
+   }
+  ]
+ }
+}

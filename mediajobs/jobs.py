@@ -5,6 +5,8 @@ m1: `media-describe`, a Recording entry for one audio or video file, with what t
 m2: `media-transcribe`, what is said in a Recording's file (faster-whisper, on the CPU), on the Recording and in a Transcript's files.
 m3: `media-link`, a Recording joined to the Transcript made earlier from its file; `media-backfill`, a Recording for each of a person's own
     files already in the library (a dry run first, then a batch at a time).
+m4: `media-link` for an entry of another package (Studio's beat, take, sound, speech line): its file's Recording named in its `recording`
+    field and the Recording's facts mirrored into the fields it has always held them in (mirror.py).
 
 The worker runs one job at a time (marvin_worker's runner claims a job and runs it to the end in its one loop before it polls again), so a
 long transcription and a describe never share the CPU inside one container: the describe waits."""
@@ -17,7 +19,7 @@ from urllib.parse import urlencode
 from marvin_worker import marvin_api
 from marvin_worker.jobs import Context, JobError, job_kind
 
-from . import audio_measure, ffmpeg, library, recording, transcribe, video, waveform
+from . import audio_measure, ffmpeg, library, mirror, recording, transcribe, video, waveform
 
 DESCRIBE = "media-describe"
 TRANSCRIBE = "media-transcribe"
@@ -348,7 +350,7 @@ def keep_transcript(ctx: Context, rec: dict, fields: dict, title: str) -> str:
 
 @job_kind(
     TRANSCRIBE,
-    description="Hear what is said in a Recording's audio or video file with faster-whisper, on this machine's CPU (free), and write it to the Recording: the language, the words as text, and each word with its start and end in seconds from the file's start ([{text, start, end}]); status transcribed, or no-speech when nothing is said. The words, the words with times, in paragraphs and as JSON are kept as files on the Recording's Transcript entry (made or found). A Recording not described yet is described first. Only recordings of 1 to 1800 seconds; a generated one (a made voice) or one heard already is left alone unless `force`. The file itself and its metadata are never changed",
+    description="Hear what is said in a Recording's audio or video file with faster-whisper, on this machine's CPU (free), and write it to the Recording: the language, the words as text, and each word with its start and end in seconds from the file's start ([{text, start, end}]); status transcribed, or no-speech when nothing is said. The words, the words with times, in paragraphs and as JSON are kept as files on the Recording's Transcript entry (made or found). A Recording not described yet is described first. Only recordings of 1 to 1800 seconds; a generated one (a made voice) or one heard already is left alone unless `force`. The file itself and its metadata are never changed. With `entry` (and `field`, `mirror`, `ref_field`, as media-link takes them), that entry's mirrored facts are written again afterwards",
     inputs={
         "asset": {"type": "asset", "required": False, "accepts": ["audio/*", "video/*"], "description": "the audio or video file (its slug or id)"},
         "recording": {"type": "string", "required": False, "description": "or the Recording entry's slug"},
@@ -356,14 +358,30 @@ def keep_transcript(ctx: Context, rec: dict, fields: dict, title: str) -> str:
         "hotwords": {"type": "string", "required": False, "description": "names and unusual words to listen for, so they are spelled right"},
         "model": {"type": "string", "required": False, "description": "tiny, base, small, medium or large-v3 (default small)"},
         "force": {"type": "boolean", "required": False, "description": "transcribe it even when it was heard already, or a service made it"},
+        "entry": {"type": "string", "required": False, "description": "an entry using the file (as media-link names it): its mirrored facts are written again once the words are known, heard now or before"},
+        "field": {"type": "string", "required": False, "description": "with entry: its field holding the file"},
+        "ref_field": {"type": "string", "required": False, "description": "with entry: its field naming the Recording (recording by default)"},
     },
     produces=["text/plain", "application/json"],
     needs=["faster-whisper"],
 )
 def media_transcribe(job: dict, ctx: Context) -> dict:
-    """A Recording's file → what is said in it, on the Recording (language, text, words, status) and as files on its Transcript."""
-    job_slug = str(job.get("job") or ctx.name or "")
-    return transcribe_recording(ctx, _args(job), job_slug, files_slug=job_slug)
+    """A Recording's file → what is said in it, on the Recording (language, text, words, status) and as files on its Transcript; with an
+    entry (queued by media-link), that entry's mirror written again, so a beat's clip_text and clip_words follow the words."""
+    job_slug, args = str(job.get("job") or ctx.name or ""), _args(job)
+    out = transcribe_recording(ctx, args, job_slug, files_slug=job_slug)
+    slug = str(args.get("entry") or "").strip()
+    rec = _row(ctx, str(out["result"].get("recording") or "")) if slug and out["result"].get("recording") else None
+    if rec is None:
+        return out
+    row = _row(ctx, slug)
+    if row is None:
+        ctx.note(f"no entry “{slug}” to copy the words to")
+        return out
+    name, field, ref_field = _entry_args(ctx, args, row)
+    done = mirror_entry(ctx, slug, field, name, ref_field, str(_data(rec).get("asset") or ""), rec)
+    said = f"{slug}: " + (done["summary"] if done.get("skipped") else (", ".join(done["wrote"]) + " written") if done["wrote"] else "nothing to change")
+    return {"result": {**out["result"], "entry": done}, "log": f"{out['log']}; {said}"}
 
 
 def transcribe_recording(ctx: Context, args: dict, job_slug: str, *, files_slug: str) -> dict:
@@ -452,17 +470,165 @@ def link_recording(ctx: Context, rec: dict) -> dict:
     return {"recording": rec_slug, "asset": asset_id, "transcript": str(chosen["slug"]) if chosen is not None else None, "transcripts": [str(t["slug"]) for t in heard], "wrote": wrote}
 
 
+MIRROR_OFF = ("false", "no", "n", "0", "off", "none")
+MIRROR_ON = ("", "true", "yes", "y", "1", "on")
+
+
+def entry_types(ctx: Context) -> dict[str, dict]:
+    """The workspace's entry types by id: {slug, fields}."""
+    rows = json.loads(marvin_api.request(ctx.creds, "/api/platform/entry-types"))
+    return {str(t["id"]): {"slug": t["slug"], "fields": ((t.get("schemaJson") or t.get("schema_json") or {}).get("fields") or [])} for t in rows}
+
+
+def type_of(types: dict[str, dict], row: dict) -> dict:
+    """An entry's type ({slug, fields}) from its `entryTypeId`."""
+    return types.get(str(row.get("entryTypeId") or ""), {"slug": str(row.get("entryType") or ""), "fields": []})
+
+
+def mirror_name(value, entry_type: str) -> "str | None":
+    """The mirror map an argument asks for: a map's name; yes (or nothing: the default) for the map of the entry's type (none for a type with
+    no map); no or `none` for no mirror at all, only the entry's `recording` (design P15)."""
+    text = "true" if value is None or value is True else "false" if value is False else str(value).strip().lower()
+    if text in MIRROR_OFF:
+        return None
+    if text in mirror.MAPS:
+        return text
+    if text in MIRROR_ON:
+        return mirror.BY_TYPE.get(entry_type)
+    raise JobError(f"mirror “{value}” is not one of {', '.join(mirror.MAPS)} (or yes, or no)")
+
+
+def _studio_poster(ctx: Context, ref, slug: str) -> None:
+    """A poster Studio's describe-video made for this beat (v226: `kind: clip-poster`, `beat: <slug>`) goes to the Trash once the beat no longer
+    shows it, as describe-video sends it there. A Recording's own poster is never touched: the Recording keeps it, and other entries may show it."""
+    if not ref or not isinstance(ref, str):
+        return
+    meta = (_find_asset(ctx, ref) or {}).get("metadataJson") or {}
+    if meta.get("kind") == "clip-poster" and meta.get("beat") == slug:
+        try:
+            marvin_api.request(ctx.creds, f"/api/platform/assets/{ref}", method="DELETE")
+        except marvin_api.MarvinError as e:
+            ctx.note(f"the old poster {ref} was left in the library ({str(e).splitlines()[0][:120]})")
+
+
+def mirror_entry(ctx: Context, slug: str, field: str, name: "str | None", ref_field: str, held: str, rec: "dict | None") -> dict:
+    """Write an entry's `ref_field` and its mirrored facts from `rec`, the Recording of the file `held` (or empty them all when `held` is
+    empty), reading the entry just before and writing only what differs. Nothing is written when the entry's field no longer holds `held`
+    (a newer job has the newer file), nor from a Recording of another file (the trust rule). {entry, wrote, left_out, skipped?}."""
+    row = _row(ctx, slug)
+    if row is None:
+        raise JobError(f"no entry “{slug}”")
+    before = _data(row)
+    now = str(before.get(field) or "").strip()
+    if now != held:
+        said = f"{slug}'s {field} changed since this was asked for: nothing written (the job asked for since links the new file)"
+        return {"entry": slug, "wrote": [], "skipped": True, "summary": said}
+    if not held:
+        after, left_out = mirror.cleared(before, name, ref_field), []
+    else:
+        rec_data = _data(rec or {})
+        if not mirror.trusted(rec_data, held):
+            said = f"{(rec or {}).get('slug')} is not of the file in {slug}'s {field}: nothing written"
+            return {"entry": slug, "wrote": [], "skipped": True, "summary": said}
+        full = mirror.MAPS[name](rec_data, before) if name else {}
+        facts, left_out = mirror.within_limits(full, type_of(entry_types(ctx), row)["fields"]) if full else (full, [])
+        if left_out:
+            ctx.note(f"left as they are on {slug}, outside what the field allows: " + ", ".join(f"{k} ({full[k]})" for k in left_out))
+        stale = bool(str(before.get(ref_field) or "").strip()) and before.get(ref_field) != rec["slug"]
+        after = mirror.merged(before, facts, {ref_field: str(rec["slug"])}, stale=stale)
+    wrote = mirror.changed(before, after)
+    if wrote:
+        body = json.dumps({"title": row.get("title"), "slug": row.get("slug"), "dataJson": after}).encode()
+        marvin_api.request(ctx.creds, f"/api/platform/entries/{row['id']}", method="PATCH", data=body, content_type="application/json")
+        if "clip_poster" in wrote:
+            _studio_poster(ctx, before.get("clip_poster"), slug)
+    return {"entry": slug, "wrote": wrote, "left_out": left_out}
+
+
+def _queue_hearing(ctx: Context, job_slug: str, rec: dict, entry: dict, title: str) -> dict:
+    """Queue media-transcribe for the Recording, with the entry to mirror again once its words are heard (they reach the beat then). Never fails
+    the link: a queue that cannot be reached is said."""
+    data = _data(rec)
+    if data.get("status") in recording.HEARD:
+        return {"words": f"{rec['slug']} was heard already"}
+    if data.get("has_audio") is not True:
+        return {"words": f"{rec['slug']} has no sound: nothing to hear"}
+    if data.get("source") == "generated":
+        return {"words": f"{rec['slug']} was made by a service, which said its words: not transcribed"}
+    try:
+        made = marvin_api.create_entry(
+            ctx.creds, _type_id(ctx, "job"), f"{job_slug or rec['slug']}-hear", f"Hear: {title}"[:200],
+            {"kind": TRANSCRIBE, "args": {"recording": str(rec["slug"]), **entry}, "status": "queued"},
+        )  # fmt: skip
+    except (JobError, marvin_api.MarvinError) as e:
+        return {"words": f"could not ask for the words ({str(e).splitlines()[0][:160]})"}
+    return {"words": f"the words are being heard ({made.get('slug')})", "transcribe_job": made.get("slug")}
+
+
+def _entry_args(ctx: Context, args: dict, row: dict) -> tuple["str | None", str, str]:
+    """(the mirror map, the field holding the file, the field naming the Recording) for an entry: as the job names them, else by its type
+    (a beat's clip, any other's audio), the field whether the mirror is on or off."""
+    entry_type = type_of(entry_types(ctx), row)["slug"]
+    name = mirror_name(args.get("mirror"), entry_type)
+    field = str(args.get("field") or "").strip() or mirror.field_of(name or mirror.BY_TYPE.get(entry_type))
+    return name, field, str(args.get("ref_field") or "").strip() or mirror.REF_FIELD
+
+
+def link_entry(ctx: Context, args: dict, job_slug: str) -> dict:
+    """media-link for an entry of another package (Studio's beat, take, sound or speech line): the Recording of the file in its `field`, found or
+    made and described, named in its `ref_field`, with the facts copied into the entry's own fields (the mirror). The file the workflow saw
+    (`asset`) must still be the one there, else a newer job has it. An emptied field empties them all."""
+    slug = str(args.get("entry") or "").strip()
+    row = _row(ctx, slug)
+    if row is None:
+        raise JobError(f"no entry “{slug}”")
+    name, field, ref_field = _entry_args(ctx, args, row)
+    held = str(_data(row).get(field) or "").strip()
+    if "asset" in args and str(args.get("asset") or "").strip() != held:
+        said = f"Skipped: {slug}'s {field} changed after this was asked for; the job asked for since links the file there now."
+        return {"result": {"entry": slug, "wrote": [], "skipped": True, "summary": said}, "log": said}
+    if not held:
+        out = mirror_entry(ctx, slug, field, name, ref_field, "", None)
+        said = f"{slug} has no file in {field}: " + (f"emptied {', '.join(out['wrote'])}" if out["wrote"] else "nothing to empty")
+        return {"result": {**out, "recording": None, "summary": said}, "log": said}
+    try:
+        asset = marvin_api.asset(ctx.creds, held)
+    except marvin_api.MarvinError as e:
+        raise JobError(f"no file “{held}” in {slug}'s {field} ({str(e).splitlines()[0][:160]})") from e
+    if str(asset.get("id")) != held:
+        raise JobError(f"{slug}'s {field} holds “{held}”, which is not a file's id")
+    rec, made = find_or_create(ctx, asset, recording.kind_guess(str(asset.get("mimeType") or ""), str(asset.get("name") or "")))
+    if made or _data(rec).get("status") in (None, "", "new", "failed"):
+        ctx.note(f"{rec['slug']} is not described yet: describing it first")
+        media_describe({"job": job_slug, "kind": DESCRIBE, "args": {"recording": rec["slug"]}}, ctx)
+        rec = _row(ctx, str(rec["slug"])) or rec
+    out = mirror_entry(ctx, slug, field, name, ref_field, held, rec)
+    said = f"{slug} ↔ {rec['slug']}" + (" (mirror off)" if name is None else f" ({name})") + ": "
+    said += (", ".join(out["wrote"]) + " written" if out["wrote"] else "nothing to change") if not out.get("skipped") else out["summary"]
+    heard = {}
+    if library.flag(args.get("transcribe"), False) and not out.get("skipped"):
+        heard = _queue_hearing(ctx, job_slug, rec, {"entry": slug, "field": field, "mirror": name or "none", "ref_field": ref_field}, str(row.get("title") or slug))
+        said += f"; {heard['words']}"
+    return {"result": {**out, "recording": str(rec["slug"]), "asset": held, "created": made, **heard, "summary": said}, "log": said}
+
+
 @job_kind(
     LINK,
-    description="Join a Recording to the Transcript made earlier from its file (a Transcript whose source is that file, Studio's older ones included): the Recording's `transcript` names it and the Transcript's `recording` names the Recording back. Only what differs is written; nothing is made, and a Transcript that names another Recording is left as it is. A file with no Recording is said, not made (media-describe makes it)",
+    description="Join a Recording to what uses its file. Given an entry (a Studio beat, take, sound or speech line) and the field holding its file: find or make the file's Recording (described first when it is new), name it in the entry's `recording` field and copy the Recording's facts into the fields the entry has always kept them in (the mirror: a beat's clip_seconds, clip_width, clip_height, clip_has_audio, clip_poster, clip_text, clip_words; a take's, a sound's or a line's length, waveform and levels), writing only what differs, never the file's field itself; an emptied field empties them. With `transcribe`, a Recording with sound not heard yet is sent to the transcriber, which copies the words in once heard. Given only a file or a Recording: join the Recording to the Transcript made earlier from its file, both ways. Yes/no arguments, read as a job or a run form sends them (true or yes): `mirror` (beat-clip, take, sound or line; yes, the default, for the map of the entry's type; no or none for only the `recording` field) and `transcribe`",
     inputs={
-        "asset": {"type": "asset", "required": False, "accepts": ["audio/*", "video/*"], "description": "the audio or video file (its slug or id)"},
-        "recording": {"type": "string", "required": False, "description": "or the Recording entry's slug"},
+        "entry": {"type": "string", "required": False, "description": "the entry's slug (a beat, take, sound or speech line)"},
+        "field": {"type": "string", "required": False, "description": "the entry's field holding the file (clip for a beat's clip, else audio)"},
+        "asset": {"type": "asset", "required": False, "accepts": ["audio/*", "video/*"], "description": "with an entry: the file the field held when this was asked for (a job for a file since replaced does nothing); alone: the audio or video file (its slug or id)"},
+        "recording": {"type": "string", "required": False, "description": "or, alone, the Recording entry's slug"},
+        "ref_field": {"type": "string", "required": False, "description": "the entry's field naming its Recording (recording by default)"},
     },
+    needs=["ffmpeg"],
 )
 def media_link(job: dict, ctx: Context) -> dict:
-    """A Recording (by its slug, or its file's) → joined to its file's Transcript."""
+    """An entry → its file's Recording, named and mirrored; or a Recording (by its slug, or its file's) → joined to its file's Transcript."""
     args = _args(job)
+    if str(args.get("entry") or "").strip():
+        return link_entry(ctx, args, str(job.get("job") or ctx.name or ""))
     ref, rec_ref = str(args.get("asset") or "").strip(), str(args.get("recording") or "").strip()
     if rec_ref:
         rec = _row(ctx, rec_ref)

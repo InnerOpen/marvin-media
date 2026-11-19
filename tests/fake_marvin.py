@@ -22,8 +22,9 @@ TYPES = {"job": "type-job", "recording": "type-recording", "transcript": "type-t
 
 
 class FakeMarvin:
-    def __init__(self, types: dict | None = None):
+    def __init__(self, types: dict | None = None, fields: dict | None = None):
         self.types = dict(TYPES if types is None else types)
+        self.fields = dict(fields or {})  # a type's field definitions (`schemaJson.fields`), for the types a test gives them
         self.entries: list[dict] = []
         self.assets: dict[str, dict] = {}
         self.files: dict[str, Path] = {}
@@ -52,7 +53,7 @@ class FakeMarvin:
         return record
 
     def add_entry(self, entry_type: str, slug: str, data: dict, *, title: str = "", status: str = "draft") -> dict:
-        row = {"id": str(uuid.uuid4()), "slug": slug, "title": title or slug, "status": status, "entryType": entry_type, "dataJson": dict(data)}
+        row = {"id": str(uuid.uuid4()), "slug": slug, "title": title or slug, "status": status, "entryType": entry_type, "entryTypeId": self.types.get(entry_type), "dataJson": dict(data)}
         self.entries.append(row)
         return row
 
@@ -79,7 +80,7 @@ class FakeMarvin:
         if method != "GET" and not (method == "POST" and rest == ["entries", "query"]):
             self.writes.append((method, url.path))
         if rest == ["entry-types"] and method == "GET":
-            return _json([{"slug": s, "id": i} for s, i in self.types.items()])
+            return _json([{"slug": s, "id": i, "schemaJson": {"fields": self.fields.get(s, [])}} for s, i in self.types.items()])
         if rest == ["entries", "query"] and method == "POST":
             body = json.loads(data)
             rows = self._query(body["spec"])
@@ -95,6 +96,8 @@ class FakeMarvin:
                 if self.fail_entry_patch:
                     raise marvin_api.MarvinError(f"Marvin answered 500 for {path}: boom")
                 body = json.loads(data)
+                if refused := self._refused(row["entryType"], body["dataJson"]):
+                    raise marvin_api.MarvinError(f"Marvin answered 400 for {path}: {json.dumps({'detail': f'Content validation failed: {refused}'})}")
                 row["dataJson"] = dict(body["dataJson"])
                 return _json(row)
             if method == "DELETE":
@@ -124,6 +127,19 @@ class FakeMarvin:
                 record["trashedAt"] = "2026-11-18T00:00:00Z"
                 return b""
         raise AssertionError(f"the fake Marvin has no {method} {path}")
+
+    def _refused(self, entry_type: str, data: dict) -> "str | None":
+        """What Marvin's content validator says of a write that breaks a field's rule (a number outside its min and max, a value not among a
+        select's options), for the types a test gave fields: Marvin refuses the whole write then, naming no field."""
+        for spec in self.fields.get(entry_type, []):
+            value = data.get(spec["key"])
+            if value is None:
+                continue
+            if spec.get("type") == "number" and ((spec.get("min") is not None and value < spec["min"]) or (spec.get("max") is not None and value > spec["max"])):
+                return f"Value {value} is outside {spec.get('min')}..{spec.get('max')}"
+            if spec.get("type") == "select" and value not in spec.get("options", []):
+                return f"Invalid option {value!r}"
+        return None
 
     def _list(self, params: dict) -> list[dict]:
         """The library as Marvin's list gives it. Only what the worker asks for is understood; anything else fails the test."""
@@ -160,7 +176,7 @@ class FakeMarvin:
             hook(body["slug"])
         entry_type = next(s for s, i in self.types.items() if i == body["entryTypeId"])
         slug = self._free(body["slug"], {e["slug"] for e in self.entries})
-        row = {"id": str(uuid.uuid4()), "slug": slug, "title": body["title"], "status": body.get("status", "draft"), "entryType": entry_type, "dataJson": dict(body["dataJson"])}
+        row = {"id": str(uuid.uuid4()), "slug": slug, "title": body["title"], "status": body.get("status", "draft"), "entryType": entry_type, "entryTypeId": body["entryTypeId"], "dataJson": dict(body["dataJson"])}
         self.entries.append(row)
         return row
 

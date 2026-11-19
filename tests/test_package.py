@@ -20,9 +20,10 @@ BLUEPRINTS = {b["slug"]: b for b in MANIFEST["blueprints"]}
 STUDIO_TRANSCRIPT = json.loads((ROOT / "tests" / "data" / "studio_transcript_v229.json").read_text(encoding="utf-8"))
 M1 = json.loads((ROOT / "tests" / "data" / "media_package_m1.json").read_text(encoding="utf-8"))  # the package as m1 shipped it
 M2 = (ROOT / "tests" / "data" / "media_package_m2.json").read_text(encoding="utf-8")  # the package file as m2 shipped it, byte for byte
+M3 = (ROOT / "tests" / "data" / "media_package_m3.json").read_text(encoding="utf-8")  # …and as m3 shipped it
 WORKFLOWS = (
     "media-recording-on-upload", "media-describe", "media-archive-done-job", "media-transcribe-recording", "media-transcribe-on-describe",
-    "media-backfill-dry-run", "media-backfill-run", "media-recording-asset-trashed",
+    "media-backfill-dry-run", "media-backfill-run", "media-recording-asset-trashed", "media-link-entry",
 )  # fmt: skip
 JOB_WORKFLOWS = tuple(w for w in WORKFLOWS if w != "media-recording-asset-trashed")  # the ones that queue a job
 
@@ -44,7 +45,7 @@ def _fields(slug: str) -> dict:
 # ── what it is ───────────────────────────────────────────────────────────────
 def test_the_package_is_media_at_its_own_version_with_exactly_these_pieces():
     assert (MANIFEST["format"], MANIFEST["slug"], MANIFEST["name"]) == (1, "media", "Media")
-    assert MANIFEST["version"] == "3"
+    assert MANIFEST["version"] == "4"
     assert [(b["kind"], b["slug"]) for b in MANIFEST["blueprints"]] == [
         ("entry_type", "recording"), ("entry_type", "transcript"), ("collection", "media-recordings"), *(("workflow", s) for s in WORKFLOWS),
     ]  # fmt: skip
@@ -57,16 +58,24 @@ def test_v2_changed_nothing_m1_brought():
     assert MANIFEST["blueprints"][: len(M1["blueprints"])] == M1["blueprints"]
 
 
-def test_v3_changes_nothing_m2_brought_byte_for_byte_and_only_adds_backfill_and_the_trash_workflow():
-    """The file as m2 shipped it, with only its version changed, is where v3's file starts, character for character, up to the end of m2's
-    last item: v3 only adds after it."""
-    m2 = json.loads(M2)
-    assert m2["version"] == "2" and {k: v for k, v in m2.items() if k not in ("version", "blueprints")} == {k: v for k, v in MANIFEST.items() if k not in ("version", "blueprints")}
-    kept = M2.replace('"version": "2"', '"version": "3"', 1)
-    kept = kept[: kept.rindex("\n  ]\n}")]  # up to the closing brace of m2's last item
+def _only_adds(shipped: str, version: str, added: list[str]) -> None:
+    """The file as an earlier version shipped it, with only its version changed, is where this file starts, character for character, up to
+    the end of that version's last item: the newer one only adds after it (an update would leave an item it brought as it is anyway)."""
+    old = json.loads(shipped)
+    assert old["version"] == version and {k: v for k, v in old.items() if k not in ("version", "blueprints")} == {k: v for k, v in MANIFEST.items() if k not in ("version", "blueprints")}
+    kept = shipped.replace(f'"version": "{version}"', f'"version": "{MANIFEST["version"]}"', 1)
+    kept = kept[: kept.rindex("\n  ]\n}")]  # up to the closing brace of the old file's last item
     assert PACKAGE.read_text(encoding="utf-8").startswith(kept + ",\n")
-    assert MANIFEST["blueprints"][: len(m2["blueprints"])] == m2["blueprints"]
-    assert [b["slug"] for b in MANIFEST["blueprints"][len(m2["blueprints"]) :]] == ["media-backfill-dry-run", "media-backfill-run", "media-recording-asset-trashed"]
+    assert MANIFEST["blueprints"][: len(old["blueprints"])] == old["blueprints"]
+    assert [b["slug"] for b in MANIFEST["blueprints"][len(old["blueprints"]) :]] == added
+
+
+def test_v3_changed_nothing_m2_brought_byte_for_byte_and_only_added_backfill_and_the_trash_workflow():
+    _only_adds(M2, "2", ["media-backfill-dry-run", "media-backfill-run", "media-recording-asset-trashed", "media-link-entry"])
+
+
+def test_v4_changes_nothing_m3_brought_byte_for_byte_and_only_adds_linking_an_entry_by_hand():
+    _only_adds(M3, "3", ["media-link-entry"])
 
 
 def test_it_never_brings_the_worker_types_core_sets_up():
@@ -443,3 +452,25 @@ def test_moving_a_recording_to_the_trash_cannot_set_the_workflow_off_again():
     assert flow["trigger"]["event"] == "asset_trashed"
     entry_actions = marvin("marvin.services.automation.actions.entry")
     assert entry_actions.IF_NONE_SKIP == flow["actions"][0]["if_none"]
+
+
+# ── linking an entry by hand (m4) ───────────────────────────────────────────
+def test_linking_by_hand_asks_for_the_entry_and_its_yes_or_no_choices_reach_media_link_as_it_reads_them():
+    from marvin_worker.jobs import check_args, load_kinds
+
+    from mediajobs import jobs, library
+
+    inputs = marvin("marvin.services.automation.inputs")
+    matcher = marvin("marvin.services.automation.matcher")
+    load_kinds("mediajobs.jobs")
+    flow = _flow("media-link-entry")
+    assert BLUEPRINTS["media-link-entry"]["requires"] == ["entry_type:job"] and flow["trigger"]["type"] == "manual"
+    assert [(i["name"], i["type"], i["required"]) for i in flow["trigger"]["inputs"]] == [("entry", "text", True), ("mirror", "choice", False), ("transcribe", "choice", False)]
+    (act,) = flow["actions"]
+    assert act["op"] == "create" and act["entry_type"] == "job" and act["data"]["kind"] == "media-link" and act["data"]["status"] == "queued"
+    for given, expected in (({"entry": "b04"}, {"entry": "b04", "mirror": "yes", "transcribe": "no"}), ({"entry": "t1", "mirror": "no", "transcribe": "yes"}, {"entry": "t1", "mirror": "no", "transcribe": "yes"})):
+        values, _entry = inputs.resolve(None, None, SimpleNamespace(trigger=flow["trigger"]), given)
+        args = matcher.interpolate(act["data"]["args"], {"input": values})
+        assert args == expected and "asset" not in args  # by hand: whatever file the entry holds now
+        check_args("media-link", args)
+    assert jobs.mirror_name("yes", "beat") == "beat-clip" and jobs.mirror_name("no", "beat") is None and library.flag("no", True) is False

@@ -3,7 +3,7 @@
 A package for [Marvin](https://github.com/InnerOpen/marvin) that gives every audio and video file a **Recording** entry: what the file says
 about itself (its length, its make, for a video its picture's size, frame rate and a poster frame, how loud it is, its waveform) measured by a
 worker, one Recording per file, and, when asked, what is said in it (transcribed on the worker's CPU with faster-whisper). The file itself is
-never changed.
+never changed; what is said in it is written into its description (when that is empty or the worker's own), so Marvin's AI search finds it.
 
 It has two parts:
 
@@ -64,6 +64,27 @@ A package update replaces a workflow's steps but keeps its on/off state.
   (found by the Recording's `transcript` field or by its `recording` field, else made as `<recording>-transcript`), with `source` the file's
   **id** whichever way it was asked. Transcribing again (`force`) writes the same Transcript and moves its old files to the Trash.
 - Never writes the file's own `metadata.words` (the captions' source).
+- **Makes the speech searchable.** Marvin's AI index (RAG) embeds an asset's name, alt text, description and tags, in chunks of 1500
+  characters, again on every `asset_updated`; a Recording's words are on an entry, and entries are indexed only when published. So once speech
+  is heard, the file's `description` gets it (`mediajobs/searchable.py`), in this form:
+
+  ```
+  Speech in <the file's name>, as text with where each part starts:
+  [0:00:00] Hello, I'm Jared.
+  [0:00:03] This is the take.
+  ```
+
+  The lines are the timestamped transcript file's exactly (`text.timestamped`: `[h:mm:ss]`, as `text.stamp` writes it), so each chunk of
+  the index carries the minutes it covers. Marvin sets no length on a description (an unbounded column, no `max_length` on `AssetUpdate`),
+  so the worker keeps its own: 30,000 characters (`searchable.MAX_CHARS`, about 1800 s of brisk speech). A longer one is cut between two
+  lines and ends `(Cut here: the speech goes on from 0:25:13; the whole of it is on the Transcript rec-….)`, a line that does not start
+  with a time.
+  It is written only when the description is **empty**, or when this worker wrote it and nobody has changed it since:
+  `metadata.description_by = {kind, job, hash}` says which kind and job wrote it and the hash of the text. A description a person wrote,
+  or edited after the worker, is never replaced (the job's log says so). The asset's metadata is sent back whole with `description_by`
+  added (Marvin replaces an asset's metadata on a write), read just before, so `audio`, `video`, `recording`, `words` and the rest are kept.
+  Transcribing again (`force`) writes the worker's own description again; nothing is written when it would not change; no speech leaves the
+  description as it is. A write Marvin refuses is said in the log and the transcription stands.
 
 `media-link` (m3) takes `asset` (the file's slug or id) or `recording` (a Recording's slug). It makes nothing: it joins the file's Recording
 to the Transcript made earlier from the same file (a Transcript whose `source` is the file's id, such as Studio's older
@@ -174,6 +195,24 @@ Rebuild the image and recreate the container first (below): the worker must offe
    for a long recording, and the worker does one job at a time, so a batch of 50 long recordings holds every describe behind it for an hour or
    more. Files over 1800 s are skipped, and a file with a Transcript already (Studio's older ones, joined by media-link) is not heard again.
 
+## Making what was said in files heard before searchable (once)
+
+Recordings transcribed before the worker wrote the description (by an image built before it did) have their words on the Recording only. `media-backfill`
+with `searchable` writes them into their files' descriptions, in the same form, without running the model: from the Recording's `words`
+(each with its start; a line ends after a sentence, at a pause of 1.2 s or before it passes 200 characters), else from its Transcript's
+`timestamped` file (downloaded; the Recording keeps no words above 5,000). Only a file whose description is **empty** is written; a person's,
+or one the worker wrote already, is left alone. There is no workflow for it (the package stays at version 4): queue a Job by hand, Entries →
+Jobs → New, Kind `media-backfill`, Status `queued`, Args:
+
+1. `{"searchable": "yes"}`: a **dry run** (the default). Writes and downloads nothing; the result's `counts` says how many Recordings
+   `would-write`, and why each other one would not (`written-already`, `kept`, `not-transcribed`, `no-speech`, `no-transcript`, `no-file`,
+   `in-trash`, `other-kind`), and `outcomes.<reason>.recordings` names them.
+2. `{"searchable": "yes", "dry_run": "no"}`: writes at most `limit` descriptions (default 50, at most 500); `kinds` takes audio, video or
+   both. Run it again until `remaining` is false: those written are passed over as `written-already`, so a second run over the same
+   Recordings writes nothing.
+
+Each description written is one `asset_updated`, which Marvin's index answers by embedding the file again.
+
 ## Installing it in a workspace
 
 1. **Set up workers** first (Settings → Workers → "Set up workers"): core's `job`, `job-kind` and `worker` types. The package needs `job` and
@@ -263,6 +302,7 @@ mediajobs/recording.py           what a Recording holds, from a file's facts (pu
 mediajobs/mirror.py              the mirror: a Recording's facts as Studio's beat, take, sound and line fields (pure)
 mediajobs/transcribe.py          the model (faster-whisper): load, hear once with word times, the limits (from Studio's storytranscribe)
 mediajobs/text.py                the transcript's text forms (shared with Studio's storytranscribe)
+mediajobs/searchable.py          the speech as the file's description, and whose that description is (pure)
 mediajobs/{ffmpeg,audio_measure,waveform,video}.py   shared with Studio's storyrender: its renders run them
 docker/                          the image, its build script, compose for one workspace, the env file's shape
 tests/                           a stand-in Marvin (fake_marvin.py), test recordings made with ffmpeg (media_files.py)

@@ -33,6 +33,7 @@ class FakeMarvin:
         self.downloads: list[str] = []
         self.before_create = None  # a hook: called with the create's slug just before Marvin makes it (a rival job's create, say)
         self.fail_entry_patch = False
+        self.fail_asset_patch = False
         self.strict_asset_slugs = False
         self.lists: list[dict] = []  # the query string of every library list asked for (paging checks)
 
@@ -120,8 +121,16 @@ class FakeMarvin:
                 return self.files[rest[1]].read_bytes()
             if method == "GET":
                 return _json(record)
-            if method == "PATCH":
-                record["metadataJson"] = dict(json.loads(data)["metadata"])
+            if method == "PATCH":  # as Marvin's AssetUpdate: only the fields sent are changed, and metadata is replaced whole
+                if self.fail_asset_patch:
+                    error = marvin_api.MarvinUnreachable if self.fail_asset_patch == "unreachable" else marvin_api.MarvinError
+                    raise error(f"Marvin answered 500 for {path}: boom")
+                body = json.loads(data)
+                assert set(body) <= {"slug", "name", "alt_text", "altText", "description", "metadata", "tag_ids"}, body
+                if "metadata" in body:
+                    record["metadataJson"] = dict(body["metadata"])
+                if "description" in body:
+                    record["description"] = body["description"]
                 return _json(record)
             if method == "DELETE":
                 record["trashedAt"] = "2026-11-18T00:00:00Z"

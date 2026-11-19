@@ -1,0 +1,22 @@
+# The Media worker for ONE workspace. Every name carries the workspace, so a second workspace on the same machine is a second project that
+# collides with nothing (and with none of Screenplay Studio's containers either). The worker only reaches OUT to Marvin and polls for
+# `job` records; nothing listens.
+#
+#   install -m 600 docker/worker.env.example ~/.config/marvin-media/mash-burn-co.env    # then fill it in; it stays out of the repository
+#   MEDIA_WORKSPACE=mash-burn-co docker compose -f docker/compose.yml up -d
+#   MEDIA_WORKSPACE=mash-burn-co docker compose -f docker/compose.yml logs -f
+#
+# MEDIA_VERSION picks the image (default: latest, i.e. the last docker/build.sh); MEDIA_ENV_FILE overrides where the env file is.
+# m1 offers media-describe only. The transcriber (media-transcribe, faster-whisper on the CPU) is m2's.
+name: media-${MEDIA_WORKSPACE:?set MEDIA_WORKSPACE to the workspace this worker serves, e.g. mash-burn-co}
+
+services:
+  media:
+    image: marvin-media-worker:${MEDIA_VERSION:-latest}
+    container_name: ${MEDIA_WORKSPACE}-media
+    restart: unless-stopped
+    env_file: ${MEDIA_ENV_FILE:-${HOME}/.config/marvin-media/${MEDIA_WORKSPACE}.env}   # MARVIN_API_URL, MARVIN_USER_TOKEN; mode 600; never in git
+    command: python -m marvin_worker work
+    environment:
+      WORKER_NAME: ${MEDIA_WORKSPACE}-media
+      WORKER_KINDS: media-describe

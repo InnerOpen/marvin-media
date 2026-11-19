@@ -1,0 +1,37 @@
+# Builds the Media worker image and publishes it to this repository's container registry (ghcr.io) when a version tag is pushed:
+#   git tag -s m2 -m "m2: ..." && git push origin m2
+# The tag must match the package version in docs/media.marvin-package.json (the image goes with the package of the same version): m2, or
+# m2.1, m2.2... to publish the image again without a new package. The base is the public generic Marvin worker (InnerOpen/marvin-worker).
+name: publish-image
+on:
+  push:
+    tags: ["m*"]
+permissions:
+  contents: read
+  packages: write
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { path: MarvinMedia }
+      - uses: actions/checkout@v4
+        with:
+          repository: InnerOpen/marvin-worker
+          path: MarvinWorker
+      - name: The tag matches the package version
+        run: |
+          package="m$(python3 -c "import json;print(json.load(open('MarvinMedia/docs/media.marvin-package.json'))['version'])")"
+          echo "${GITHUB_REF_NAME}" | grep -Eq "^${package}(\\.[0-9]+)?$" || { echo "tag ${GITHUB_REF_NAME} does not match the package ${package}"; exit 1; }
+      - uses: docker/login-action@v3
+        with: { registry: ghcr.io, username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}" }
+      - name: Build and push
+        run: |
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          image="ghcr.io/${owner}/marvin-media-worker"
+          docker build -f MarvinWorker/docker/Dockerfile -t marvin-worker-base MarvinWorker
+          docker build -f MarvinMedia/docker/Dockerfile --build-arg MEDIA_VERSION="${GITHUB_REF_NAME}" --build-arg MEDIA_REVISION="${GITHUB_SHA::7}" \
+            --label org.opencontainers.image.source="https://github.com/${GITHUB_REPOSITORY}" \
+            -t "${image}:${GITHUB_REF_NAME}" -t "${image}:latest" MarvinMedia
+          docker push "${image}:${GITHUB_REF_NAME}"
+          docker push "${image}:latest"

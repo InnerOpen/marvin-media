@@ -1,0 +1,37 @@
+# The tests and the lint. The worker kinds run on the generic Marvin worker, a separate public repository (InnerOpen/marvin-worker), checked
+# out next to this one.
+name: tests
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with: { path: MarvinMedia }
+      - uses: actions/checkout@v4
+        with:
+          repository: InnerOpen/marvin-worker
+          path: MarvinWorker
+      # The mirror can stall for an hour: short network timeouts and retries make a bad moment fail fast or pass on a second try.
+      - name: ffmpeg
+        timeout-minutes: 5
+        run: |
+          apt_opts="-o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20"
+          for attempt in 1 2 3; do
+            sudo apt-get $apt_opts update && sudo apt-get $apt_opts install -y --no-install-recommends ffmpeg && exit 0
+            sleep 10
+          done
+          exit 1
+      - uses: astral-sh/setup-uv@v6
+      - name: Test
+        working-directory: MarvinMedia
+        run: uv run --python 3.12 --extra dev --with-editable ../MarvinWorker python -m pytest -q --timeout=300 -rs
+      - name: Lint
+        working-directory: MarvinMedia
+        run: uv run --python 3.12 --extra dev ruff check .
+

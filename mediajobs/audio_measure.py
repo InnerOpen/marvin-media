@@ -1,5 +1,6 @@
-# Copied from ScreenplayStudio render/storyrender/audio_measure.py at 09bef82 (v229), unchanged below this header, so a file described here gives the same
-# numbers as Studio's own jobs. Studio keeps its copy until P6, when it imports this one instead (see README, "Where the code came from").
+# Shared with Screenplay Studio: from P6 its storyrender imports this module (storyrender.audio_measure is this module), so Studio's renders and
+# describe jobs run this very code. It came from Studio's render/storyrender/audio_measure.py at 09bef82 (v229). A change here changes what Studio renders: Studio's
+# render goldens (CI job studio-on-this-mediajobs) and tests/test_parity.py must pass (see README, "Shared with Screenplay Studio").
 """How long a recording really is. A browser's recording (webm) is written as it is made, so its header has no length and ffprobe cannot say;
 an upload may carry one. The pure part of the `measure-audio` job: read the header when it has a length, otherwise listen to the whole file."""
 

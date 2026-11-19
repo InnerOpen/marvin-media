@@ -1,6 +1,7 @@
 # The tests and the lint. The worker kinds run on the generic Marvin worker, a separate public repository (InnerOpen/marvin-worker), checked
 # out next to this one. The package checks run a second time against Marvin itself (the public InnerOpen/marvin), with its own validators and
-# condition matcher, where a missing Marvin fails them instead of skipping them.
+# condition matcher, where a missing Marvin fails them instead of skipping them. And Screenplay Studio's own suites run on this checkout's
+# mediajobs: Studio's renders run its ffmpeg, audio_measure, waveform and video modules (README, "Shared with Screenplay Studio").
 name: tests
 on:
   push:
@@ -58,3 +59,35 @@ jobs:
           MEDIA_REQUIRE_MARVIN: "1"
           PYTHONPATH: ../MarvinWorker:.
         run: uv run --project ../Marvin --frozen python -m pytest -q -p no:cacheprovider tests/test_package.py
+
+  studio-on-this-mediajobs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with: { path: MarvinMedia }
+      - uses: actions/checkout@v4
+        with:
+          repository: InnerOpen/marvin-worker
+          path: MarvinWorker
+      - uses: actions/checkout@v4
+        with:
+          repository: iWobble/ScreenplayStudio
+          path: ScreenplayStudio
+      - name: ffmpeg
+        timeout-minutes: 5
+        run: |
+          apt_opts="-o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20"
+          for attempt in 1 2 3; do
+            sudo apt-get $apt_opts update && sudo apt-get $apt_opts install -y --no-install-recommends ffmpeg && exit 0
+            sleep 10
+          done
+          exit 1
+      - uses: astral-sh/setup-uv@v6
+      # The same commands as Studio's own CI, with this mediajobs in place of Media's main.
+      - name: Studio's render suite (its byte-identical render and pull goldens among them)
+        working-directory: ScreenplayStudio/render
+        run: uv run --python 3.12 --with pytest --with pytest-timeout --with screenplain==0.12.0 --with reportlab==5.1.0 --with pillow --with-editable . --with-editable ../../MarvinWorker --with-editable ../../MarvinMedia python -m pytest -q --timeout=300
+      - name: Studio's transcribe suite
+        working-directory: ScreenplayStudio/transcribe
+        run: uv run --python 3.12 --with pytest --with pytest-timeout --with-editable . --with-editable ../../MarvinWorker --with-editable ../../MarvinMedia python -m pytest -q --timeout=300

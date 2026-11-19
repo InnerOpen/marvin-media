@@ -4,7 +4,11 @@ one change: the model runs ONCE, with word times, and both the segments (the thr
 
 faster-whisper and av are imported only when a file is heard, so the kinds load (and their tests run) where they are not installed. The model
 is read once per worker and kept; its files are cached on disk (`HF_HOME`, a volume in the container), so only the first job ever waits for
-the download."""
+the download.
+
+Shared with Screenplay Studio (P6): its storytranscribe imports `load_model`, `has_sound` and `MODEL` from here, so one worker keeps one
+copy of a model for Studio's kinds and these. `transcribe_file` is Media's own: Studio's `transcribe` runs the model without word times and
+keeps its own (a word-timed run can cut the segments differently)."""
 
 from __future__ import annotations
 

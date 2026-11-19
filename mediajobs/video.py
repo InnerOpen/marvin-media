@@ -1,6 +1,7 @@
-# Copied from ScreenplayStudio render/storyrender/clip.py at 09bef82 (v229): only the part that describes a video (its length, size,
-# frame rate, sound and poster: what the describe-video job uses), unchanged below the imports, so a file described here gives the same numbers
-# as Studio's describe-video. The rest of clip.py (how a clip is laid over a shot) is the renderer's and stays in Studio.
+# Shared with Screenplay Studio: from P6 its storyrender/clip.py imports the describe half from here (describe, poster, seconds and
+# the rest below), so Studio's describe-video and the render's reading of a clip run this very code; how a clip is laid over a shot
+# stays in Studio. It came from Studio's render/storyrender/clip.py at 09bef82 (v229). A change here changes what Studio renders
+# (see README, "Shared with Screenplay Studio").
 """What a video is: its length as a player plays it, its picture's size after a phone's turn, its frame rate, whether it has sound, and a
 poster frame. The describe half of Studio's clip.py."""
 

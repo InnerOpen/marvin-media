@@ -193,13 +193,21 @@ each file inside its own job, one after another: that is why the owner runs it i
 The token: `marvin user tokens create --name media-worker --pin <workspace>`. It lives only in that env file (mode 600), never in the repository.
 Pushing a tag `mN` that matches the package version publishes the image to `ghcr.io/inneropen/marvin-media-worker` (`.github/workflows/publish-image.yml`).
 
-## Where the code came from
+## Shared with Screenplay Studio
 
-`mediajobs/ffmpeg.py`, `audio_measure.py`, `waveform.py` and `video.py` (the describe half of `clip.py`) are copied unchanged from Screenplay
-Studio (`render/storyrender`, commit 09bef82, v229), so a file described here gives exactly the numbers Studio's describe-video, describe-audio,
-measure-level and make-waveform give. Studio keeps its own copy for now; later Studio's image builds `FROM marvin-media-worker` and imports
-these instead. `tests/test_parity.py` holds the two together: against a Studio checkout when `STUDIO_RENDER` names its `render` folder, else
-against `tests/data/studio_golden.json` (`scripts/studio_golden.py` writes it).
+`mediajobs/ffmpeg.py`, `audio_measure.py`, `waveform.py` and `video.py` (the describe half of Studio's `clip.py`) came unchanged from Screenplay
+Studio (`render/storyrender`, commit 09bef82, v229), `text.py` from its `storytranscribe` (v231), and `transcribe.py`'s `load_model` and
+`has_sound` from its `storytranscribe/jobs.py`. Since P6 Studio no longer has copies: its image builds `FROM marvin-media-worker` and its code
+imports these modules (`storyrender.ffmpeg`, `storyrender.audio_measure`, `storyrender.waveform` and `storytranscribe.text` *are* these
+modules, and `storyrender.clip` takes its describe half from `video.py`). So **a change to one of them changes Studio's renders and jobs**:
+
+- the CI job `studio-on-this-mediajobs` runs Screenplay Studio's own suites (`render` and `transcribe`, with its byte-identical render and
+  pull goldens) on this checkout's `mediajobs`;
+- `tests/test_parity.py` holds the numbers together: against a Studio checkout when `STUDIO_RENDER` names its `render` folder (exact), else
+  against `tests/data/studio_golden.json` (`scripts/studio_golden.py` wrote it from Studio 09bef82). Studio's CI runs it in the exact mode.
+
+Studio gets `mediajobs` the way it gets marvin-worker: in the image from the base it builds on, and in its tests from a checkout next to
+its own (`--with-editable ../MarvinMedia`). There is no index package and no tag to pin: the image tag (`marvin-media-worker:mN`) is the pin.
 
 ## Development
 
@@ -222,8 +230,8 @@ mediajobs/jobs.py                the worker kinds (media-describe, media-transcr
 mediajobs/library.py             which library files a backfill gives a Recording, and why not the others (pure)
 mediajobs/recording.py           what a Recording holds, from a file's facts (pure)
 mediajobs/transcribe.py          the model (faster-whisper): load, hear once with word times, the limits (from Studio's storytranscribe)
-mediajobs/text.py                the transcript's text forms, copied from Studio's storytranscribe
-mediajobs/{ffmpeg,audio_measure,waveform,video}.py   copied from Studio, unchanged
+mediajobs/text.py                the transcript's text forms (shared with Studio's storytranscribe)
+mediajobs/{ffmpeg,audio_measure,waveform,video}.py   shared with Studio's storyrender: its renders run them
 docker/                          the image, its build script, compose for one workspace, the env file's shape
 tests/                           a stand-in Marvin (fake_marvin.py), test recordings made with ffmpeg (media_files.py)
 tests/data/                      Studio's v229 Transcript (Media's must equal it plus one field); Studio's numbers for the parity check;

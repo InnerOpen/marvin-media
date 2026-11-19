@@ -1,5 +1,6 @@
-# Copied from ScreenplayStudio render/storyrender/ffmpeg.py at 09bef82 (v229), unchanged below this header, so a file described here gives the same
-# numbers as Studio's own jobs. Studio keeps its copy until P6, when it imports this one instead (see README, "Where the code came from").
+# Shared with Screenplay Studio: from P6 its storyrender imports this module (storyrender.ffmpeg is this module), so Studio's renders and
+# describe jobs run this very code. It came from Studio's render/storyrender/ffmpeg.py at 09bef82 (v229). A change here changes what Studio renders: Studio's
+# render goldens (CI job studio-on-this-mediajobs) and tests/test_parity.py must pass (see README, "Shared with Screenplay Studio").
 """The only place that runs ffmpeg/ffprobe: probing durations and running a command with its stderr on failure."""
 
 import json

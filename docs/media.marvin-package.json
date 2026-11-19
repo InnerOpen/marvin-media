@@ -3,7 +3,7 @@
   "slug": "media",
   "name": "Media",
   "description": "A Recording entry for every audio and video file: its length, make, picture, loudness, waveform and poster, measured by the Media worker, and the Transcripts made from them. Every workflow arrives switched off.",
-  "version": "4",
+  "version": "5",
   "blueprints": [
     {
       "kind": "entry_type",
@@ -21,6 +21,9 @@
         "description": "One audio or video file and what it says about itself: its length, its make, for a video its picture's size, frame rate and a poster, how loud it is, its waveform and (once transcribed) what is said in it. Made and kept by the Media worker, one per file; the file itself is never changed.",
         "sort_order": 0,
         "is_rendered": false,
+        "capabilities_json": {
+          "offer_in_new": false
+        },
         "schema_json": {
           "fields": [
             {
@@ -306,6 +309,9 @@
         "description": "What was said in a recording, as text: the transcript files a worker made, the recording they came from, and your notes. A transcribe job is the request; this is what it gives you.",
         "sort_order": 0,
         "is_rendered": false,
+        "capabilities_json": {
+          "offer_in_new": false
+        },
         "schema_json": {
           "fields": [
             {

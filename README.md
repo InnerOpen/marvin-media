@@ -11,7 +11,7 @@ It has two parts:
 - **The worker kinds** (`mediajobs/`, kinds named `media-…`): the work the workflows hand off, run by the Media worker image on the generic
   [Marvin worker](https://github.com/InnerOpen/marvin-worker).
 
-## What the package brings (m1 to m4)
+## What the package brings (m1 to m5)
 
 | | slug | what it is |
 |---|---|---|
@@ -201,7 +201,7 @@ Recordings transcribed before the worker wrote the description (by an image buil
 with `searchable` writes them into their files' descriptions, in the same form, without running the model: from the Recording's `words`
 (each with its start; a line ends after a sentence, at a pause of 1.2 s or before it passes 200 characters), else from its Transcript's
 `timestamped` file (downloaded; the Recording keeps no words above 5,000). Only a file whose description is **empty** is written; a person's,
-or one the worker wrote already, is left alone. There is no workflow for it (the package stays at version 4): queue a Job by hand, Entries →
+or one the worker wrote already, is left alone. There is no workflow for it (the package stays at version 5): queue a Job by hand, Entries →
 Jobs → New, Kind `media-backfill`, Status `queued`, Args:
 
 1. `{"searchable": "yes"}`: a **dry run** (the default). Writes and downloads nothing; the result's `counts` says how many Recordings

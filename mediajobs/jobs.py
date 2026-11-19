@@ -491,7 +491,7 @@ def media_link(job: dict, ctx: Context) -> dict:
 LIST_PAGE = 100  # files per page of the library's list
 QUERY_PAGE = 500  # entries per page of a query (Marvin's QUERY_MAX_ROWS)
 MAX_PAGES = 200  # 20,000 files: far past any library this was written for, and a stop for a list that never ends
-SHOWN = 25  # files the plan names under each reason (all are counted)
+SHOWN = 1000  # files the plan names under each reason: every one in a library of this size (all are counted); a guard on the job's result size
 LIMIT, MAX_LIMIT = 50, 500
 
 

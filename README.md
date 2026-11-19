@@ -109,7 +109,8 @@ run gave), `include_worker_files` (default false), `min_bytes`. The yes/no ones 
   ```
 
   `candidates` lists the first `limit` files; `more` says how many follow and `next` where a run of that size would stop. Each reason in
-  `skipped` names up to 25 of its files, with what was seen (`metadata.kind=video`, `origin generated`, the Recording's slug…).
+  `skipped` names every one of its files (up to 1000 a reason), with what was seen (`metadata.kind=video`, `origin generated`, the
+  Recording's slug…), so each group can be checked file by file.
 - A **real run** (`dry_run` false) takes the next `limit` files of the plan, oldest first, and for each: finds or makes its Recording
   (`rec-` + 12 characters of the file's id, made with only `{asset, kind, status: new}`, as media-describe makes it), describes it with
   media-describe's own logic in the same job, joins it to an older Transcript of the file (media-link's logic), and with `transcribe`

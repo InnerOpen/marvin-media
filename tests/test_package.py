@@ -3,7 +3,7 @@ workflow arrives switched off, and which files and job events its workflows answ
 
 The checks that need Marvin import it and are skipped where it is not installed; run them with Marvin's interpreter:
     PYTHONPATH=../MarvinWorker ../Marvin/.venv/bin/python -m pytest -q tests/test_package.py
-CI runs them against a checkout of InnerOpen/marvin, where a missing Marvin fails them (.github/workflows/tests.yml)."""
+CI runs them against a checkout of InnerOpen/marvin (develop), where a missing Marvin fails them (.github/workflows/tests.yml)."""
 
 import importlib
 import json

@@ -1,7 +1,11 @@
 """The kinds of job the Media package (docs/media.marvin-package.json) hands to a worker. Every kind is named `media-…`, so none can take the
 place of another package's kind in an image that loads several (Screenplay Studio's, later).
 
-m1: `media-describe`, a Recording entry for one audio or video file, with what the file says about itself."""
+m1: `media-describe`, a Recording entry for one audio or video file, with what the file says about itself.
+m2: `media-transcribe`, what is said in a Recording's file (faster-whisper, on the CPU), on the Recording and in a Transcript's files.
+
+The worker runs one job at a time (marvin_worker's runner claims a job and runs it to the end in its one loop before it polls again), so a
+long transcription and a describe never share the CPU inside one container: the describe waits."""
 
 import json
 from pathlib import Path
@@ -9,9 +13,12 @@ from pathlib import Path
 from marvin_worker import marvin_api
 from marvin_worker.jobs import Context, JobError, job_kind
 
-from . import audio_measure, ffmpeg, recording, video, waveform
+from . import audio_measure, ffmpeg, recording, transcribe, video, waveform
 
 DESCRIBE = "media-describe"
+TRANSCRIBE = "media-transcribe"
+TRANSCRIPT_TYPE = "transcript"
+TRANSCRIPT_KIND = "transcript"  # metadata.kind on a transcript file: worker output, as Studio's transcribe marks its files
 
 
 def _args(job: dict) -> dict:
@@ -239,3 +246,156 @@ def media_describe(job: dict, ctx: Context) -> dict:
     said += (f", {heard['level_lufs']:g} LUFS" if "level_lufs" in heard else "") + (", no sound" if key == "video" and not described["has_audio"] else "")
     said += f"; {'made' if made else 'found'} {rec_slug}" + (", written" if wrote else ", unchanged") + ("; the file's metadata updated" if wrote_meta else "")
     return {"result": {"recording": rec_slug, "asset": asset_id, "created": made, **facts}, "log": said}
+
+
+# ── media-transcribe ────────────────────────────────────────────────────────
+FILE_MIME = {"text": "text/plain", "timestamped": "text/plain", "paragraphs": "text/plain", "json": "application/json"}
+FILE_LABEL = {"text": "transcript", "timestamped": "transcript with times", "paragraphs": "transcript in paragraphs", "json": "transcript (JSON)"}
+TRANSCRIPT_FIELD = {"text": "words", "timestamped": "timestamped", "paragraphs": "paragraphs", "json": "json"}  # file -> the Transcript's field
+
+
+def transcript_slug(rec_slug: str) -> str:
+    """The Transcript's slug: fixed, so a job tried again (or a second one) finds the Transcript it made instead of making another."""
+    return f"{rec_slug}-transcript"
+
+
+def described_recording(ctx: Context, args: dict, job_slug: str) -> dict:
+    """The Recording to transcribe, described: found by its slug (`recording`) or its file (`asset`), and made and described first, with
+    media-describe's own logic, when it is missing or not described yet. Describing writes `described`, which is what the workflow
+    media-transcribe-on-describe listens for: with it on, that queues a second transcribe job, which finds this one's work done and skips."""
+    ref, rec_ref = str(args.get("asset") or "").strip(), str(args.get("recording") or "").strip()
+    row = None
+    if rec_ref:
+        row = _row(ctx, rec_ref)
+        if row is None:
+            raise JobError(f"no Recording “{rec_ref}”")
+        held = str(_data(row).get("asset") or "").strip()
+        if ref and held and ref != held:
+            raise JobError(f"the Recording “{rec_ref}” is of another file than “{ref}”: give one or the other")
+    elif ref:
+        try:
+            found = marvin_api.asset(ctx.creds, ref)
+        except marvin_api.MarvinError as e:
+            raise JobError(f"no file “{ref}” ({str(e).splitlines()[0][:160]})") from e
+        row = next(iter(recordings_of(ctx, str(found["id"]))), None)
+    else:
+        raise JobError("media-transcribe needs args.asset (the file's slug or id) or args.recording (a Recording's slug)")
+    if row is not None and _data(row).get("status") not in (None, "", "new", "failed"):
+        return row
+    ctx.note("not described yet: describing it first")
+    said = media_describe({"job": job_slug, "kind": DESCRIBE, "args": {"recording": row["slug"]} if row else {"asset": ref}}, ctx)
+    return _row(ctx, said["result"]["recording"]) or {}
+
+
+def _upload_files(ctx: Context, files: dict, *, asset_id: str, rec_slug: str, title: str, job_slug: str, language: str, seconds: float) -> dict:
+    """The transcript's files as assets, each saying what it is (`kind: transcript`), which file it was heard from (`derived_from`, so Marvin
+    files it as a version of the recording, and `source`) and which Recording; the worker adds `metadata.worker` itself. {file: asset id}."""
+    out = {}
+    for key, path in files.items():
+        made = marvin_api.upload_asset(
+            ctx.creds, path, slug=f"{job_slug or rec_slug}-{key}", name=f"{FILE_LABEL[key][:1].upper()}{FILE_LABEL[key][1:]}: {title}", mime=FILE_MIME[key],
+            description=f"Speech in {title}, as text (faster-whisper).",
+            metadata={"kind": TRANSCRIPT_KIND, "source": asset_id, "derived_from": asset_id, "recording": rec_slug, "language": language, "seconds": seconds},
+        )  # fmt: skip
+        out[key] = str(made["id"])
+    return out
+
+
+def _transcript_of(ctx: Context, rec: dict) -> "dict | None":
+    """The Recording's Transcript: the one its `transcript` field names, else the oldest that names the Recording back."""
+    named = str(_data(rec).get("transcript") or "").strip()
+    if named and (row := _row(ctx, named)) is not None:
+        return row
+    spec = {"entry_type": TRANSCRIPT_TYPE, "data": {"recording": rec["slug"]}, "sort": {"by": "created_at", "direction": "asc"}}
+    return next(iter(marvin_api.query(ctx.creds, spec, limit=5)), None)
+
+
+def _trash_old_files(ctx: Context, before: dict, keep: set[str], asset_id: str) -> None:
+    """Files a transcription of THIS recording made and a new one replaced go to the Trash; anything else in the fields is left alone."""
+    for key in TRANSCRIPT_FIELD.values():
+        ref = before.get(key)
+        if not ref or not isinstance(ref, str) or ref in keep:
+            continue
+        old = _find_asset(ctx, ref)
+        meta = (old or {}).get("metadataJson") or {}
+        if meta.get("kind") == TRANSCRIPT_KIND and meta.get("derived_from") == asset_id:
+            try:
+                marvin_api.request(ctx.creds, f"/api/platform/assets/{ref}", method="DELETE")
+            except marvin_api.MarvinError as e:
+                ctx.note(f"the old transcript file {ref} was left in the library ({str(e).splitlines()[0][:120]})")
+
+
+def keep_transcript(ctx: Context, rec: dict, fields: dict, title: str) -> str:
+    """Find or make the Recording's Transcript and write the files and facts to it (its notes kept). Its slug."""
+    row = _transcript_of(ctx, rec)
+    if row is None:
+        slug = transcript_slug(rec["slug"])
+        row = marvin_api.create_entry(ctx.creds, _type_id(ctx, TRANSCRIPT_TYPE), slug, f"Transcript: {title}", fields)
+        return str(row["slug"])
+    before = _data(row)
+    write_entry(ctx, str(row["slug"]), fields)
+    _trash_old_files(ctx, before, {str(v) for v in fields.values()}, str(fields["source"]))
+    return str(row["slug"])
+
+
+@job_kind(
+    TRANSCRIBE,
+    description="Hear what is said in a Recording's audio or video file with faster-whisper, on this machine's CPU (free), and write it to the Recording: the language, the words as text, and each word with its start and end in seconds from the file's start ([{text, start, end}]); status transcribed, or no-speech when nothing is said. The words, the words with times, in paragraphs and as JSON are kept as files on the Recording's Transcript entry (made or found). A Recording not described yet is described first. Only recordings of 1 to 1800 seconds; a generated one (a made voice) or one heard already is left alone unless `force`. The file itself and its metadata are never changed",
+    inputs={
+        "asset": {"type": "asset", "required": False, "accepts": ["audio/*", "video/*"], "description": "the audio or video file (its slug or id)"},
+        "recording": {"type": "string", "required": False, "description": "or the Recording entry's slug"},
+        "language": {"type": "string", "required": False, "description": "the spoken language as a code, e.g. en; empty to detect it"},
+        "hotwords": {"type": "string", "required": False, "description": "names and unusual words to listen for, so they are spelled right"},
+        "model": {"type": "string", "required": False, "description": "tiny, base, small, medium or large-v3 (default small)"},
+        "force": {"type": "boolean", "required": False, "description": "transcribe it even when it was heard already, or a service made it"},
+    },
+    produces=["text/plain", "application/json"],
+    needs=["faster-whisper"],
+)
+def media_transcribe(job: dict, ctx: Context) -> dict:
+    """A Recording's file → what is said in it, on the Recording (language, text, words, status) and as files on its Transcript."""
+    args = _args(job)
+    force, job_slug = args.get("force") is True, str(job.get("job") or ctx.name or "")
+    rec = described_recording(ctx, args, job_slug)
+    rec_slug, data = str(rec.get("slug") or ""), _data(rec)
+
+    def answer(put: dict, said: str, **result) -> dict:
+        if put and job_slug:
+            put["job"] = job_slug
+        if put:
+            write_entry(ctx, rec_slug, put)
+        return {"result": {"recording": rec_slug, "asset": data.get("asset"), **result, "summary": said}, "log": said}
+
+    if why := transcribe.refusal(data, force=force):
+        return answer({}, f"{rec_slug} was not transcribed: {why}.", skipped=True)
+    asset_id = str(data.get("asset") or "")
+    if data.get("has_audio") is False:
+        return answer({"status": "no-speech", "text": "", "words": []}, f"{rec_slug} has no sound: nothing to hear", words=0)
+    try:
+        asset = marvin_api.asset(ctx.creds, asset_id)
+    except marvin_api.MarvinError as e:
+        raise JobError(f"the file of {rec_slug} cannot be read ({str(e).splitlines()[0][:160]})") from e
+    title = str(asset.get("name") or asset.get("slug") or asset_id)
+    src = ctx.work / f"recording{Path(str(asset.get('originalFilename') or title)).suffix or '.bin'}"
+    marvin_api.download_asset(ctx.creds, asset_id, src)
+    if not transcribe.has_sound(src):
+        return answer({"status": "no-speech", "text": "", "words": []}, f"{title} has no sound stream: nothing to hear", words=0)
+
+    model = transcribe.load_model(str(args.get("model") or transcribe.MODEL))
+    language, hotwords = str(args.get("language") or "").strip() or None, str(args.get("hotwords") or "").strip() or None
+    made = transcribe.transcribe_file(model, src, ctx.work / (job_slug or "transcript"), language=language, hotwords=hotwords, note=ctx.note)
+    if not made["files"]:
+        return answer({"status": "no-speech", "text": "", "words": []}, f"no speech heard in {title}", words=0, seconds=made["seconds"])
+
+    files = _upload_files(ctx, made["files"], asset_id=asset_id, rec_slug=rec_slug, title=title, job_slug=job_slug, language=made["language"], seconds=made["seconds"])
+    fields = {TRANSCRIPT_FIELD[k]: v for k, v in files.items()}
+    fields.update(source=asset_id, recording=rec_slug, language=made["language"], duration_seconds=data.get("duration_seconds", made["seconds"]))
+    if job_slug:
+        fields["job"] = job_slug
+    kept = keep_transcript(ctx, rec, fields, title)
+    words = transcribe.on_recording(made["words"])
+    said = f"{len(made['words'])} words heard in {title} ({made['language']}), {made['segments']} segments; written to {rec_slug} and {kept}"
+    if made["words"] and not words:
+        said += f" (over {transcribe.WORDS_ON_RECORDING} words: the word times are in the Transcript's JSON file only)"
+    put = {"language": made["language"], "text": made["text"], "words": words, "status": "transcribed", "transcript": kept}
+    return answer(put, said, language=made["language"], seconds=made["seconds"], segments=made["segments"], words=len(made["words"]), transcript=kept, files=files)

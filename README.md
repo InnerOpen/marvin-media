@@ -58,7 +58,8 @@ marvin-worker #16) or marks them with `metadata.kind`; otherwise a worker's audi
 ## Running the worker
 
 The image is the generic Marvin worker plus ffmpeg and `mediajobs`. Build it with a checkout of
-[marvin-worker](https://github.com/InnerOpen/marvin-worker) next to this one (`../MarvinWorker`):
+[marvin-worker](https://github.com/InnerOpen/marvin-worker) **on main** next to this one (`../MarvinWorker`): the kinds need its safe create
+(#15) and upload stamp (#16), and the build stops if the base lacks them.
 
 ```bash
 docker/build.sh                       # builds marvin-worker-base from ../MarvinWorker, then marvin-media-worker:m1 (and :latest)

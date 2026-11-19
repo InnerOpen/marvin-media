@@ -126,7 +126,9 @@ def test_every_file_says_it_is_a_transcript_of_the_recording_and_which_worker_ma
         assert meta["kind"] == "transcript" and meta["derived_from"] == ID and meta["source"] == ID and meta["recording"] == SLUG, meta
         assert meta["worker"] == {"kind": "media-transcribe", "job": "transcribe-1"} and f["origin"] == "derived"
     assert {f["name"] for f in files} >= {"Transcript in paragraphs: Take one", "Transcript (JSON): Take one"}
-    assert asset["metadataJson"] == before  # the file's own metadata (its caption words) is never touched
+    after = dict(asset["metadataJson"])
+    assert after.pop("description_by")["kind"] == "media-transcribe"  # the speech written to its description says so
+    assert after == before  # the file's other metadata (its facts, its caption words) is kept as it was
 
 
 @pytest.mark.parametrize("asked", ["take-one", ID])

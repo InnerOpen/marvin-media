@@ -19,7 +19,7 @@ from urllib.parse import urlencode
 from marvin_worker import marvin_api
 from marvin_worker.jobs import Context, JobError, job_kind
 
-from . import audio_measure, ffmpeg, library, mirror, recording, transcribe, video, waveform
+from . import audio_measure, ffmpeg, library, mirror, recording, searchable, transcribe, video, waveform
 
 DESCRIBE = "media-describe"
 TRANSCRIBE = "media-transcribe"
@@ -108,6 +108,36 @@ def write_asset_facts(ctx: Context, asset: dict, key: str, facts: dict) -> bool:
         ctx.note(f"could not write the facts to the file's own metadata ({str(e).splitlines()[0][:120]}); the Recording has them")
         return False
     return True
+
+
+def write_speech(ctx: Context, asset: dict, timestamped: str, *, kind: str, job_slug: str, transcript: str = "", refresh: bool = True) -> tuple[str, str]:
+    """What is said in the file, as its `description` (searchable.py: the header, then `[h:mm:ss] text` lines, cut at a line under
+    searchable.MAX_CHARS), so Marvin's AI index finds it. `asset` is the file as read JUST before (its metadata is sent back whole, with
+    `description_by` added: Marvin replaces an asset's metadata on a write). Written when the description is empty, or (with `refresh`) when
+    this worker wrote it and nobody has changed it since; a description a person wrote or edited is never touched. Nothing is written when
+    nothing would change. (outcome, what to say): outcome is written, refreshed, unchanged, kept, in-trash or failed."""
+    name = str(asset.get("name") or asset.get("slug") or asset.get("id"))
+    if asset.get("trashedAt"):
+        return "in-trash", f"{name} is in the Trash: its description is left as it is"
+    whose = searchable.owner(asset)
+    if whose == "person":
+        return "kept", f"{name} has a description a person wrote: left as it is (the speech is on its Recording and Transcript)"
+    if whose == "worker" and not refresh:
+        return "unchanged", f"{name}'s description holds its speech already (written by {(asset.get('metadataJson') or {})[searchable.MARK].get('kind')})"
+    description, cut = searchable.compose(name, timestamped, transcript=transcript)
+    if whose == "worker" and str(asset.get("description") or "").strip() == description.strip():
+        return "unchanged", f"{name}'s description holds this speech already: unchanged"
+    meta = dict(asset.get("metadataJson") or {})
+    body = json.dumps({"description": description, "metadata": {**meta, searchable.MARK: searchable.mark(kind, job_slug, description)}}).encode()
+    try:
+        marvin_api.request(ctx.creds, f"/api/platform/assets/{asset['id']}", method="PATCH", data=body, content_type="application/json")
+    except marvin_api.MarvinUnreachable:
+        raise
+    except marvin_api.MarvinError as e:
+        return "failed", f"the speech could not be written to {name}'s description ({str(e).splitlines()[0][:120]})"
+    again = whose == "worker"
+    said = f"the speech written{' again' if again else ''} to {name}'s description ({len(description)} characters" + (f", cut at {searchable.MAX_CHARS}" if cut else "") + "), so search finds it"
+    return ("refreshed" if again else "written"), said
 
 
 def _find_asset(ctx: Context, ref: str) -> "dict | None":
@@ -376,7 +406,7 @@ def keep_transcript(ctx: Context, rec: dict, fields: dict, title: str) -> str:
 
 @job_kind(
     TRANSCRIBE,
-    description="Hear what is said in a Recording's audio or video file with faster-whisper, on this machine's CPU (free), and write it to the Recording: the language, the words as text, and each word with its start and end in seconds from the file's start ([{text, start, end}]); status transcribed, or no-speech when nothing is said. The words, the words with times, in paragraphs and as JSON are kept as files on the Recording's Transcript entry (made or found). A Recording not described yet is described first. Only recordings of 1 to 1800 seconds; a generated one (a made voice) or one heard already is left alone unless `force`. The file itself and its metadata are never changed. With `entry` (and `field`, `mirror`, `ref_field`, as media-link takes them), that entry's mirrored facts are written again afterwards",
+    description="Hear what is said in a Recording's audio or video file with faster-whisper, on this machine's CPU (free), and write it to the Recording: the language, the words as text, and each word with its start and end in seconds from the file's start ([{text, start, end}]); status transcribed, or no-speech when nothing is said. The words, the words with times, in paragraphs and as JSON are kept as files on the Recording's Transcript entry (made or found). A Recording not described yet is described first. Only recordings of 1 to 1800 seconds; a generated one (a made voice) or one heard already is left alone unless `force`. Speech heard is also written into the file's description, as a line naming the file and then the words with times ([h:mm:ss] text, a line each), so Marvin's AI search finds what was said and where: only when the description is empty or this worker wrote it (metadata.description_by, kept with the file's other metadata); a description a person wrote is never replaced. No speech leaves the description alone. The file itself is never changed. With `entry` (and `field`, `mirror`, `ref_field`, as media-link takes them), that entry's mirrored facts are written again afterwards",
     inputs={
         "asset": {"type": "asset", "required": False, "accepts": ["audio/*", "video/*"], "description": "the audio or video file (its slug or id)"},
         "recording": {"type": "string", "required": False, "description": "or the Recording entry's slug"},
@@ -410,8 +440,9 @@ def media_transcribe(job: dict, ctx: Context) -> dict:
     return {"result": {**out["result"], "entry": done}, "log": f"{out['log']}; {said}"}
 
 
-def transcribe_recording(ctx: Context, args: dict, job_slug: str, *, files_slug: str) -> dict:
-    """media-transcribe's work, for its own job or for a backfill that hears several Recordings in one job (`files_slug` names the files)."""
+def transcribe_recording(ctx: Context, args: dict, job_slug: str, *, files_slug: str, kind: str = TRANSCRIBE) -> dict:
+    """media-transcribe's work, for its own job or for a backfill that hears several Recordings in one job (`files_slug` names the files,
+    `kind` is the job's, for the description's `description_by`). Speech heard is also written to the file's description (write_speech)."""
     force = args.get("force") is True
     rec = described_recording(ctx, args, job_slug)
     rec_slug, data = str(rec.get("slug") or ""), _data(rec)
@@ -455,7 +486,23 @@ def transcribe_recording(ctx: Context, args: dict, job_slug: str, *, files_slug:
     if made["words"] and not words:
         said += f" (over {transcribe.WORDS_ON_RECORDING} words: the word times are in the Transcript's JSON file only)"
     put = {"language": made["language"], "text": made["text"], "words": words, "status": "transcribed", "transcript": kept}
-    return answer(put, said, language=made["language"], seconds=made["seconds"], segments=made["segments"], words=len(made["words"]), transcript=kept, files=files)
+    out = answer(put, said, language=made["language"], seconds=made["seconds"], segments=made["segments"], words=len(made["words"]), transcript=kept, files=files)
+    described, told = _speech_to_file(ctx, asset_id, made["files"]["timestamped"].read_text(encoding="utf-8"), kind=kind, job_slug=job_slug, transcript=kept)
+    out["result"].update(description=described, summary=f"{said}; {told}")
+    out["log"] = out["result"]["summary"]
+    return out
+
+
+def _speech_to_file(ctx: Context, asset_id: str, timestamped: str, **how) -> tuple[str, str]:
+    """write_speech for a transcription that just ended, after the Recording is written (the description is the extra, never what costs the
+    transcription): the file read again first (the model ran for minutes since it was read), and what happened said in the job's log. Any
+    failure, Marvin out of reach too, is said and the job ends done: the Recording and its Transcript hold the words."""
+    try:
+        outcome, said = write_speech(ctx, marvin_api.asset(ctx.creds, asset_id), timestamped, **how)
+    except marvin_api.MarvinError as e:
+        outcome, said = "failed", f"the speech could not be written to the file's description ({str(e).splitlines()[0][:120]})"
+    ctx.note(said)
+    return outcome, said
 
 
 # ── media-link ──────────────────────────────────────────────────────────────
@@ -795,7 +842,7 @@ def _backfill_one(ctx: Context, row: dict, job_slug: str, *, describe: bool, hea
             out["transcribed"] = f"no: it has a Transcript already ({linked['transcript']})"
         elif hear:
             files_slug = f"{job_slug}-{rec_slug}" if job_slug else rec_slug
-            heard = transcribe_recording(sub, {"recording": rec_slug}, job_slug, files_slug=files_slug)["result"]
+            heard = transcribe_recording(sub, {"recording": rec_slug}, job_slug, files_slug=files_slug, kind=BACKFILL)["result"]
             out["transcribed"] = heard.get("summary") or (f"{heard.get('words', 0)} words" if not heard.get("skipped") else "skipped")
     except marvin_api.MarvinUnreachable:
         raise
@@ -819,12 +866,127 @@ def _outcome(out: dict) -> str:
     return said
 
 
+# ── media-backfill with `searchable`: the speech of Recordings heard before, into their files' descriptions ──
+SPEECH_REASONS = {
+    "written": "the speech was written to the file's description (it was empty)",
+    "refreshed": "the worker's own description was written again",
+    "would-write": "dry run: the file's description is empty, and the speech would be written to it",
+    "written-already": "the file's description holds its speech already (written by this worker, unchanged since)",
+    "kept": "the file's description was written by a person: left as it is",
+    "not-transcribed": "the Recording has not been heard (no words, no Transcript)",
+    "no-speech": "nothing was said in it (status no-speech)",
+    "no-transcript": "the Recording says it was heard, but neither its words (with times) nor a Transcript's timestamped file are there",
+    "no-file": "the Recording names no file, or one that is gone",
+    "in-trash": "the file is in the Trash",
+    "other-kind": "not of the kinds asked for",
+    "failed": "the description could not be written (said in the log)",
+}
+
+
+def _speech_source(ctx: Context, rec: dict) -> "tuple[str, str, str]":
+    """(where the timestamped lines come from: `words` or `file`, the lines (for words) or the file's id (for a file), the Transcript's
+    slug). The Recording's words when every one has a start time (no model is run, nothing downloaded); else its Transcript's `timestamped`
+    file. ("", "", slug) when there is neither."""
+    data = _data(rec)
+    found = searchable.lines_from_words(data.get("words"))
+    tr = _transcript_of(ctx, rec) if data.get("transcript") or data.get("status") == "transcribed" else None
+    tr_slug = str(tr["slug"]) if tr else ""
+    if found:
+        return "words", found, tr_slug
+    held = _data(tr).get(TRANSCRIPT_FIELD["timestamped"]) if tr else None
+    if isinstance(held, str) and held.strip():
+        return "file", held.strip(), tr_slug
+    return "", "", tr_slug
+
+
+def _speech_one(ctx: Context, rec: dict, job_slug: str, *, dry: bool, types: tuple[str, ...]) -> dict:
+    """One Recording: its file's description given the speech, or the reason it is not. Nothing is read twice that need not be: the
+    file's description is looked at before any transcript file is downloaded."""
+    data = _data(rec)
+    out: dict = {"recording": rec.get("slug"), "asset": data.get("asset")}
+    if data.get("kind") in ("audio", "video") and data["kind"] not in types:
+        return {**out, "outcome": "other-kind"}
+    if data.get("status") == "no-speech":
+        return {**out, "outcome": "no-speech"}
+    if data.get("status") != "transcribed" and not data.get("words") and not data.get("transcript"):
+        return {**out, "outcome": "not-transcribed"}
+    asset = _find_asset(ctx, str(data.get("asset") or "")) if data.get("asset") else None
+    if asset is None:
+        trashed = data.get("asset") and _trashed_asset(ctx, str(data["asset"]))
+        return {**out, "outcome": "in-trash" if trashed else "no-file"}
+    out["name"] = asset.get("name")
+    whose = searchable.owner(asset)
+    if whose != "empty":
+        return {**out, "outcome": "kept" if whose == "person" else "written-already"}
+    source, got, tr_slug = _speech_source(ctx, rec)
+    if not source:
+        return {**out, "outcome": "no-transcript"}
+    out["from"] = source
+    if dry:
+        return {**out, "outcome": "would-write"}
+    lines = got
+    if source == "file":
+        path = ctx.work / f"{rec.get('slug')}.timestamped.txt"
+        marvin_api.download_asset(ctx.creds, got, path)
+        lines = path.read_text(encoding="utf-8")
+        path.unlink(missing_ok=True)
+    outcome, said = write_speech(ctx, asset, lines, kind=BACKFILL, job_slug=job_slug, transcript=tr_slug, refresh=False)
+    return {**out, "outcome": outcome, "said": said}
+
+
+def _trashed_asset(ctx: Context, ref: str) -> bool:
+    try:
+        return bool(marvin_api.asset(ctx.creds, ref).get("trashedAt"))
+    except marvin_api.MarvinUnreachable:
+        raise
+    except marvin_api.MarvinError:
+        return False
+
+
+def backfill_speech(ctx: Context, job_slug: str, *, dry: bool, limit: int, types: tuple[str, ...]) -> dict:
+    """media-backfill with `searchable`: every live Recording, oldest first, its speech written to its file's description where that is
+    empty (write_speech; never a person's, never again over the worker's own). A dry run writes nothing and says what a run would do; a
+    run writes at most `limit` descriptions and is safe to run again (those written are passed over as written already)."""
+    recs = all_entries(ctx, {"entry_type": recording.ENTRY_TYPE, "sort": {"by": "created_at", "direction": "asc"}})
+    ctx.note(f"{len(recs)} Recordings; " + ("dry run: nothing is written" if dry else f"writing at most {limit} descriptions"))
+    counts: dict[str, int] = {}
+    shown: dict[str, list[dict]] = {}
+    writes = 0
+    stopped = None
+    for rec in recs:
+        if not dry and writes >= limit:
+            stopped = f"stopped at the limit of {limit} descriptions: run it again for the rest"
+            break
+        try:
+            out = _speech_one(ctx, rec, job_slug, dry=dry, types=types)
+        except marvin_api.MarvinUnreachable:
+            raise
+        except Exception as e:  # noqa: BLE001 — one Recording whose transcript cannot be read is said, and the batch goes on
+            out = {"recording": rec.get("slug"), "outcome": "failed", "said": (str(e).splitlines() or [type(e).__name__])[0][:300]}
+        why = out.pop("outcome")
+        counts[why] = counts.get(why, 0) + 1
+        if len(shown.setdefault(why, [])) < SHOWN:
+            shown[why].append(out)
+        if why in ("written", "refreshed", "failed"):
+            writes += why != "failed"
+            ctx.note(f"{out['recording']}: {out.get('said') or why}")
+    order = [k for k in SPEECH_REASONS if counts.get(k)]
+    said = ("Dry run: " if dry else "") + ", ".join(f"{counts[k]} {k}" for k in order) + "."
+    if dry and counts.get("would-write"):
+        said += " Run it with dry_run no to write them."
+    if stopped:
+        said += " " + stopped + "."
+    result = {"dry_run": dry, "searchable": True, "kinds": list(types), "recordings": len(recs), "counts": counts, "remaining": bool(stopped),
+              "outcomes": {k: {"count": counts[k], "meaning": SPEECH_REASONS[k], "recordings": shown[k]} for k in order}, "summary": said}  # fmt: skip
+    return {"result": result, "log": said}
+
+
 TRANSCRIBE_WARNING = "If the workflow “Media: transcribe each new recording” is on, every Recording described here is transcribed too (CPU)."
 
 
 @job_kind(
     BACKFILL,
-    description="Give the audio and video files already in the Assets library a Recording: a person's own recordings and uploads that have none yet. Left out, each with its reason: files in the Trash, files with a Recording (or one in the Trash), versions of another file, files a service made (origin generated: ElevenLabs takes and sounds), ElevenLabs voice previews, and anything a worker made (metadata.worker or metadata.kind; include_worker_files takes those too). A dry run (the default) writes nothing and returns the plan: the count for each reason, the first `limit` files that would get a Recording, and the files left out with why. A real run (dry_run false) does at most `limit` files, oldest first: makes each one's Recording (rec-<12 characters of its id>), describes it (`describe`, default true), joins it to an older Transcript of the file, and transcribes it if asked (`transcribe`, default false: 1 to 1800 seconds, minutes of CPU each). Run it again for the next files: those done have a Recording and are passed over; `after` (the result's `next`) starts after the last one done. `describe`, `transcribe`, `dry_run` and `include_worker_files` take true or false (or yes or no)",
+    description="Give the audio and video files already in the Assets library a Recording: a person's own recordings and uploads that have none yet. Left out, each with its reason: files in the Trash, files with a Recording (or one in the Trash), versions of another file, files a service made (origin generated: ElevenLabs takes and sounds), ElevenLabs voice previews, and anything a worker made (metadata.worker or metadata.kind; include_worker_files takes those too). A dry run (the default) writes nothing and returns the plan: the count for each reason, the first `limit` files that would get a Recording, and the files left out with why. A real run (dry_run false) does at most `limit` files, oldest first: makes each one's Recording (rec-<12 characters of its id>), describes it (`describe`, default true), joins it to an older Transcript of the file, and transcribes it if asked (`transcribe`, default false: 1 to 1800 seconds, minutes of CPU each). Run it again for the next files: those done have a Recording and are passed over; `after` (the result's `next`) starts after the last one done. With `searchable` (default false) it does something else: it goes over the Recordings heard before and writes what was said in each into its file's description (a line naming the file, then the words with times, [h:mm:ss] text a line each), so Marvin's AI search finds it; from the Recording's words with their times, else its Transcript's timestamped file (no model is run). Only a file whose description is empty: one a person wrote, or the worker wrote already, is left alone. A dry run (the default) writes nothing and says what a run would do; a run writes at most `limit` descriptions and can be run again safely. `describe`, `transcribe`, `dry_run`, `searchable` and `include_worker_files` take true or false (or yes or no)",
     inputs={
         "limit": {"type": "integer", "required": False, "description": f"at most this many files (default {LIMIT}, at most {MAX_LIMIT}); in a dry run, how many are listed"},
         "kinds": {"type": "string", "required": False, "enum": ["audio", "video", "both"], "description": "which files: audio, video or both (default)"},
@@ -847,6 +1009,8 @@ def media_backfill(job: dict, ctx: Context) -> dict:
     min_bytes = library.whole(args.get("min_bytes"), 0, low=0, high=2**53)
     cursor = str(args.get("after") or "").strip() or None
     job_slug = str(job.get("job") or ctx.name or "")
+    if library.flag(args.get("searchable"), False):
+        return backfill_speech(ctx, job_slug, dry=dry, limit=limit, types=types)
 
     files = library_files(ctx, types)
     trash = library_files(ctx, types, trashed=True)

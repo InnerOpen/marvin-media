@@ -13,6 +13,15 @@ Trust (design §2.3): an entry's facts come from a Recording only when that Reco
 AUDIO_SOURCES = ("uploaded", "recorded")  # a Sound's own file: its length is measured. A generated one's length is what was asked for (ElevenLabs)
 HEARD = ("transcribed", "no-speech")  # a Recording a transcriber has been through: its text and words are known (empty for no-speech)
 REF_FIELD = "recording"  # the entry's field naming its Recording (Studio's v233 `recording`, "Recording (kept by Media)")
+# An entry a workflow is waiting to act on is never written: Studio's workflows that make a still, a sound or a take start on ANY write to an
+# entry whose `status` is `queued` (screenplay-take-still, -take-sound, -take-music, -own-sound, -take-line), so a mirror write then would ask
+# for (and maybe pay for) the same thing twice. Studio's link workflows link the entry again when it leaves the queue.
+HOLD = {"status": ("queued",)}
+
+
+def held_back(entry: dict) -> "str | None":
+    """Why an entry is not written now (`status: queued`), or None."""
+    return next((f"its {key} is {entry.get(key)}" for key, values in HOLD.items() if entry.get(key) in values), None)
 
 
 def trusted(rec: dict, held: str) -> bool:

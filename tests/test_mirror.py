@@ -336,3 +336,17 @@ def test_nothing_is_queued_for_a_clip_with_no_sound_or_a_generated_file(studio, 
     studio.facts[AUDIO] = _sound(source="generated")
     assert "made by a service" in link({"entry": "rain", "asset": AUDIO, "transcribe": True}, tmp_path, job="link-2")["result"]["words"]
     assert studio.live("job") == []
+
+
+@pytest.mark.parametrize("entry_type", ["beat", "sound", "speech-line", "take"])
+def test_an_entry_a_workflow_is_waiting_on_is_never_written(studio, entry_type, tmp_path):
+    """Studio's make-a-still, make-a-sound and make-a-take workflows start on any write to an entry whose status is queued (checked with
+    Marvin's matcher in Studio's tests): a mirror write then would ask for the same thing again. Nothing is written, not even an emptying."""
+    field = "clip" if entry_type == "beat" else "audio"
+    one = studio.add_entry(entry_type, "e1", {field: CLIP if entry_type == "beat" else AUDIO, "status": "queued"})
+    out = link({"entry": "e1"}, tmp_path)["result"]
+    assert out["skipped"] is True and "queued" in out["summary"] and not any(one["id"] in p for p in _patched(studio))
+    assert studio.live() and studio.described  # its Recording is made and described all the same, ready for the link after the queue
+    two = studio.add_entry(entry_type, "e2", {field: "", "status": "queued", "recording": "rec-x", "duration_seconds": 3.0})
+    assert link({"entry": "e2"}, tmp_path, job="link-2")["result"]["skipped"] is True and not any(two["id"] in p for p in _patched(studio))
+    assert mirror.held_back({"status": "made"}) is None and mirror.held_back({}) is None

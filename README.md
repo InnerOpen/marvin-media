@@ -91,6 +91,9 @@ those fields today keeps working (`mediajobs/mirror.py`, one pure map each, desi
   for, as a workflow sends it) must still be there, else the job writes nothing: the job asked for since has the new file.
 - A fact the Recording does not know (not heard yet, no poster) empties the entry's field only when the entry's facts came from another
   Recording (its `recording` named another one); an entry from before Media keeps what Studio's own jobs wrote.
+- An entry a workflow is waiting on (`status: queued`) is never written: Studio's make-a-still, make-a-sound and make-a-take workflows start on
+  any write to a queued entry, so a write then would ask for the same thing twice. Its Recording is still made and described; Studio's link
+  workflows link it again when it leaves the queue.
 - An emptied field empties `recording` and the map's facts (settings such as `clip_look` stay). A poster Studio's describe-video made for
   the beat goes to the Trash when the beat stops showing it; a Recording's poster never does.
 - A value the entry's field would refuse (a level under a Sound's -60 dB, a length over a cap an older workspace kept) is left out and said;

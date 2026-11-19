@@ -523,6 +523,9 @@ def mirror_entry(ctx: Context, slug: str, field: str, name: "str | None", ref_fi
     if now != held:
         said = f"{slug}'s {field} changed since this was asked for: nothing written (the job asked for since links the new file)"
         return {"entry": slug, "wrote": [], "skipped": True, "summary": said}
+    if why := mirror.held_back(before):
+        said = f"{slug} is waiting on a workflow ({why}): nothing written, so that workflow is not set off again; it is linked again when it leaves the queue"
+        return {"entry": slug, "wrote": [], "skipped": True, "summary": said}
     if not held:
         after, left_out = mirror.cleared(before, name, ref_field), []
     else:

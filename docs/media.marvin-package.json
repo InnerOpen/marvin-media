@@ -3,7 +3,7 @@
   "slug": "media",
   "name": "Media",
   "description": "A Recording entry for every audio and video file: its length, make, picture, loudness, waveform and poster, measured by the Media worker, and the Transcripts made from them. Every workflow arrives switched off.",
-  "version": "5",
+  "version": "6",
   "blueprints": [
     {
       "kind": "entry_type",
@@ -388,7 +388,7 @@
     {
       "kind": "collection",
       "slug": "media-recordings",
-      "name": "Media: Recordings",
+      "name": "Recordings",
       "description": "Every audio and video file's Recording, and the Transcripts made from them.",
       "required": false,
       "category": "General",

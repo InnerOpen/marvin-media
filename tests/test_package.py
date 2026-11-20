@@ -45,15 +45,26 @@ def _fields(slug: str) -> dict:
 NEW_MENU = '        "capabilities_json": {\n          "offer_in_new": false\n        },\n'  # v5: what the two types gained, and nothing else
 
 
-def _as_before_v5(blueprints: list[dict]) -> list[dict]:
-    """The blueprints as m1 to m4 shipped them: v5 only added `capabilities_json` (offer_in_new off) to the two entry types, and an update leaves an existing type's settings as they are."""
-    return [{**b, "payload": {k: v for k, v in b["payload"].items() if k != "capabilities_json"}} if b["kind"] == "entry_type" else b for b in blueprints]
+COLLECTION_NAME = ('      "name": "Recordings",\n', '      "name": "Media: Recordings",\n')  # v6: the collection's name (now, as m1 to v5 shipped it)
+
+
+def _as_first_shipped(blueprints: list[dict]) -> list[dict]:
+    """The blueprints as m1 to m4 shipped them. v5 only added `capabilities_json` (offer_in_new off) to the two entry types, and v6 only
+    dropped "Media:" from the collection's name (the sidebar already says whose it is); an update leaves an existing type's settings and an
+    existing collection as they are."""
+    before_v5 = [{**b, "payload": {k: v for k, v in b["payload"].items() if k != "capabilities_json"}} if b["kind"] == "entry_type" else b for b in blueprints]
+    return [{**b, "name": "Media: Recordings"} if b["slug"] == "media-recordings" else b for b in before_v5]
+
+
+def _text_as_first_shipped() -> str:
+    """The file's text with what v5 and v6 changed put back."""
+    return PACKAGE.read_text(encoding="utf-8").replace(NEW_MENU, "").replace(*COLLECTION_NAME, 1)
 
 
 # ── what it is ───────────────────────────────────────────────────────────────
 def test_the_package_is_media_at_its_own_version_with_exactly_these_pieces():
     assert (MANIFEST["format"], MANIFEST["slug"], MANIFEST["name"]) == (1, "media", "Media")
-    assert MANIFEST["version"] == "5"
+    assert MANIFEST["version"] == "6"
     assert [(b["kind"], b["slug"]) for b in MANIFEST["blueprints"]] == [
         ("entry_type", "recording"), ("entry_type", "transcript"), ("collection", "media-recordings"), *(("workflow", s) for s in WORKFLOWS),
     ]  # fmt: skip
@@ -63,7 +74,7 @@ def test_v2_changed_nothing_m1_brought():
     """An update applies what is new; an item m1 brought is left exactly as it was (its on/off state included), so a behaviour change would
     have to come under a new slug anyway."""
     assert M1["version"] == "1" and MANIFEST["description"] == M1["description"]
-    assert _as_before_v5(MANIFEST["blueprints"])[: len(M1["blueprints"])] == M1["blueprints"]
+    assert _as_first_shipped(MANIFEST["blueprints"])[: len(M1["blueprints"])] == M1["blueprints"]
 
 
 def _only_adds(shipped: str, version: str, added: list[str]) -> None:
@@ -73,8 +84,8 @@ def _only_adds(shipped: str, version: str, added: list[str]) -> None:
     assert old["version"] == version and {k: v for k, v in old.items() if k not in ("version", "blueprints")} == {k: v for k, v in MANIFEST.items() if k not in ("version", "blueprints")}
     kept = shipped.replace(f'"version": "{version}"', f'"version": "{MANIFEST["version"]}"', 1)
     kept = kept[: kept.rindex("\n  ]\n}")]  # up to the closing brace of the old file's last item
-    assert PACKAGE.read_text(encoding="utf-8").replace(NEW_MENU, "").startswith(kept + ",\n")
-    assert _as_before_v5(MANIFEST["blueprints"])[: len(old["blueprints"])] == old["blueprints"]
+    assert _text_as_first_shipped().startswith(kept + ",\n")
+    assert _as_first_shipped(MANIFEST["blueprints"])[: len(old["blueprints"])] == old["blueprints"]
     assert [b["slug"] for b in MANIFEST["blueprints"][len(old["blueprints"]) :]] == added
 
 
@@ -142,6 +153,7 @@ def test_the_transcript_is_studios_exactly_plus_a_link_to_its_recording():
 
 def test_the_collection_gathers_recordings_and_transcripts():
     c = BLUEPRINTS["media-recordings"]
+    assert c["name"] == "Recordings"  # no "Media:" in front: the sidebar and the Packages page already say whose it is
     assert c["requires"] == ["entry_type:recording", "entry_type:transcript"]
     assert c["payload"]["is_smart"] is True and c["payload"]["smart_rules"] == {"entry_types": ["recording", "transcript"], "match": "all"}
 

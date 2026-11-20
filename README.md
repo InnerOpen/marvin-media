@@ -17,7 +17,7 @@ It has two parts:
 |---|---|---|
 | entry type | `recording` | One audio or video file (`asset`) and its facts: `kind` (audio/video), `source` (recorded/uploaded/generated), `status` (new, described, transcribed, no-speech, failed), `duration_seconds`, `format`, `codec`, `sample_rate`, `channels`, `width`, `height`, `fps`, `has_audio`, `poster`, `level_lufs`, `level_db`, `peak_db`, `noise_floor_db`, `clipped`, `lead_silence`, `tail_silence`, `waveform`, `language`, `text`, `words` (`[{text, start, end}]`, seconds from the file's start), `transcript`; `job`, `notes`. Limits are wide from the start (a length up to 24 hours), because a package update never widens a limit. |
 | entry type | `transcript` | Screenplay Studio's Transcript exactly, plus `recording` (a link to the Recording). Where Studio is installed the type is already there and an update adds the one field. |
-| collection | `media-recordings` | Every Recording and Transcript. |
+| collection | `media-recordings` | "Recordings": every Recording and Transcript. |
 | workflow | `media-recording-on-upload` | On `asset_uploaded`: an audio or video file a **person** uploaded or recorded queues a `media-describe` job. Left alone: anything a worker uploaded (`metadata.worker`, or `metadata.kind` from images older than the stamp), a version of another file (`derived_from`), a generated file (`origin: generated`). |
 | workflow | `media-describe` | By hand: describe one file (its slug or id), again if it was described before. |
 | workflow | `media-archive-done-job` | A finished `media-…` job is archived (`media-transcribe` ones too). **Only for a workspace without Screenplay Studio**, whose own "put a finished job away" already archives media jobs. |
@@ -201,7 +201,7 @@ Recordings transcribed before the worker wrote the description (by an image buil
 with `searchable` writes them into their files' descriptions, in the same form, without running the model: from the Recording's `words`
 (each with its start; a line ends after a sentence, at a pause of 1.2 s or before it passes 200 characters), else from its Transcript's
 `timestamped` file (downloaded; the Recording keeps no words above 5,000). Only a file whose description is **empty** is written; a person's,
-or one the worker wrote already, is left alone. There is no workflow for it (the package stays at version 5): queue a Job by hand, Entries →
+or one the worker wrote already, is left alone. There is no workflow for it (the package needed no new version for it): queue a Job by hand, Entries →
 Jobs → New, Kind `media-backfill`, Status `queued`, Args:
 
 1. `{"searchable": "yes"}`: a **dry run** (the default). Writes and downloads nothing; the result's `counts` says how many Recordings
